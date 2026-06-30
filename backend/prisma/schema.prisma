@@ -1,0 +1,230 @@
+// BudgetFlow Database Schema
+// ER Design: Users own Accounts, Budgets, Transactions, Transfers, ImportFiles, ImportRules
+// Transactions link to both an Account (balance) and a Budget (bucket spending)
+// Transfers move allocated funds between Budgets without touching Account balance
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  password     String
+  name         String
+  avatar       String?
+  currency     String   @default("THB")
+  timezone     String   @default("Asia/Bangkok")
+  alertAt80    Boolean  @default(true)
+  alertAt90    Boolean  @default(true)
+  alertAt100   Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accounts               Account[]
+  budgets                Budget[]
+  transactions           Transaction[]
+  transfers              Transfer[]
+  importFiles            ImportFile[]
+  importRules            ImportRule[]
+  auditLogs              AuditLog[]
+  allocations            Allocation[]
+  recurringTransactions  RecurringTransaction[]
+
+  @@map("users")
+}
+
+model Account {
+  id           String   @id @default(cuid())
+  userId       String
+  name         String
+  balance      Decimal  @default(0) @db.Decimal(15, 2)
+  currency     String   @default("THB")
+  isDefault    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions          Transaction[]
+  recurringTransactions RecurringTransaction[]
+
+  @@map("accounts")
+}
+
+model Budget {
+  id              String   @id @default(cuid())
+  userId          String
+  name            String
+  icon            String   @default("💰")
+  color           String   @default("#3B82F6")
+  allocatedAmount Decimal  @default(0) @db.Decimal(15, 2)
+  spentAmount     Decimal  @default(0) @db.Decimal(15, 2)
+  isArchived      Boolean  @default(false)
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions          Transaction[]
+  transfersFrom         Transfer[]             @relation("TransferFrom")
+  transfersTo           Transfer[]             @relation("TransferTo")
+  importRules           ImportRule[]
+  allocations           Allocation[]
+  recurringTransactions RecurringTransaction[]
+
+  @@map("budgets")
+}
+
+// Records each income allocation event (distributing income into buckets)
+model Allocation {
+  id        String   @id @default(cuid())
+  userId    String
+  budgetId  String
+  amount    Decimal  @db.Decimal(15, 2)
+  note      String?
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  budget Budget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  @@map("allocations")
+}
+
+model Transaction {
+  id           String          @id @default(cuid())
+  userId       String
+  accountId    String
+  budgetId     String?
+  amount       Decimal         @db.Decimal(15, 2)
+  type         TransactionType
+  description  String
+  date         DateTime
+  importFileId String?
+  isImported   Boolean         @default(false)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account    Account     @relation(fields: [accountId], references: [id])
+  budget     Budget?     @relation(fields: [budgetId], references: [id])
+  importFile ImportFile? @relation(fields: [importFileId], references: [id])
+
+  @@index([userId, date])
+  @@index([userId, type])
+  @@index([budgetId])
+  @@map("transactions")
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+model Transfer {
+  id           String   @id @default(cuid())
+  userId       String
+  fromBudgetId String
+  toBudgetId   String
+  amount       Decimal  @db.Decimal(15, 2)
+  description  String?
+  createdAt    DateTime @default(now())
+
+  user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fromBudget Budget @relation("TransferFrom", fields: [fromBudgetId], references: [id])
+  toBudget   Budget @relation("TransferTo", fields: [toBudgetId], references: [id])
+
+  @@index([userId])
+  @@map("transfers")
+}
+
+model ImportFile {
+  id           String       @id @default(cuid())
+  userId       String
+  filename     String
+  originalName String
+  mimeType     String
+  fileSize     Int
+  status       ImportStatus @default(PENDING)
+  rowCount     Int          @default(0)
+  matchedCount Int          @default(0)
+  errorMessage String?
+  processedAt  DateTime?
+  createdAt    DateTime     @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@index([userId])
+  @@map("import_files")
+}
+
+enum ImportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// Keyword matching rules for auto-categorizing CSV imports
+model ImportRule {
+  id        String   @id @default(cuid())
+  userId    String
+  keyword   String
+  budgetId  String
+  priority  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  budget Budget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, keyword])
+  @@map("import_rules")
+}
+
+model RecurringTransaction {
+  id          String          @id @default(cuid())
+  userId      String
+  accountId   String
+  budgetId    String?
+  name        String
+  type        TransactionType
+  amount      Decimal         @db.Decimal(15, 2)
+  dayOfMonth  Int
+  description String?
+  isActive    Boolean         @default(true)
+  lastRunAt   DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account Account @relation(fields: [accountId], references: [id])
+  budget  Budget? @relation(fields: [budgetId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isActive])
+  @@map("recurring_transactions")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String   // CREATE, UPDATE, DELETE, LOGIN, LOGOUT, IMPORT
+  entity    String   // Budget, Transaction, Transfer, etc.
+  entityId  String?
+  oldData   Json?
+  newData   Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
