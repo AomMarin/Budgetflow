@@ -145,6 +145,41 @@ export class BudgetService {
     );
   }
 
+  async checkAlerts(
+    userId: string,
+  ): Promise<Array<{ budgetId: string; name: string; level: 80 | 90 | 100; usagePercent: number }>> {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return [];
+
+    const budgets = await this.repo.findAll(userId);
+    const triggered: Array<{ budgetId: string; name: string; level: 80 | 90 | 100; usagePercent: number }> = [];
+
+    for (const budget of budgets) {
+      const stats = this.addStats(budget);
+      const currentLevel = stats.alertLevel ? (Number(stats.alertLevel) as 80 | 90 | 100) : null;
+      const storedLevel = budget.lastAlertedLevel as 80 | 90 | 100 | null;
+
+      if (currentLevel === storedLevel) continue;
+
+      if (currentLevel !== null && (storedLevel === null || currentLevel > storedLevel)) {
+        const prefEnabled =
+          currentLevel === 80 ? user.alertAt80 : currentLevel === 90 ? user.alertAt90 : user.alertAt100;
+        if (prefEnabled) {
+          triggered.push({
+            budgetId: budget.id,
+            name: budget.name,
+            level: currentLevel,
+            usagePercent: stats.usagePercent,
+          });
+        }
+      }
+
+      await this.repo.updateAlertLevel(budget.id, currentLevel);
+    }
+
+    return triggered;
+  }
+
   private addStats(budget: Budget): BudgetWithStats {
     const allocated = Number(budget.allocatedAmount);
     const spent = Number(budget.spentAmount);

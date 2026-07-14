@@ -12,42 +12,51 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  password     String
-  name         String
-  avatar       String?
-  currency     String   @default("THB")
-  timezone     String   @default("Asia/Bangkok")
-  alertAt80    Boolean  @default(true)
-  alertAt90    Boolean  @default(true)
-  alertAt100   Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+enum Role {
+  USER
+  ADMIN
+}
 
-  accounts               Account[]
-  budgets                Budget[]
-  transactions           Transaction[]
-  transfers              Transfer[]
-  importFiles            ImportFile[]
-  importRules            ImportRule[]
-  auditLogs              AuditLog[]
-  allocations            Allocation[]
-  recurringTransactions  RecurringTransaction[]
+model User {
+  id         String   @id @default(cuid())
+  email      String   @unique
+  password   String
+  name       String
+  avatar     String?
+  role       Role     @default(USER)
+  currency   String   @default("THB")
+  timezone   String   @default("Asia/Bangkok")
+  alertAt80  Boolean  @default(true)
+  alertAt90  Boolean  @default(true)
+  alertAt100 Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  accounts              Account[]
+  budgets               Budget[]
+  transactions          Transaction[]
+  transfers             Transfer[]
+  importFiles           ImportFile[]
+  importRules           ImportRule[]
+  auditLogs             AuditLog[]
+  allocations           Allocation[]
+  recurringTransactions RecurringTransaction[]
+  notifications         Notification[]
+  ownedHouseholds       Household[]            @relation("HouseholdOwner")
+  householdMembership   HouseholdMember?
 
   @@map("users")
 }
 
 model Account {
-  id           String   @id @default(cuid())
-  userId       String
-  name         String
-  balance      Decimal  @default(0) @db.Decimal(15, 2)
-  currency     String   @default("THB")
-  isDefault    Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  balance   Decimal  @default(0) @db.Decimal(15, 2)
+  currency  String   @default("THB")
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions          Transaction[]
@@ -57,17 +66,18 @@ model Account {
 }
 
 model Budget {
-  id              String   @id @default(cuid())
-  userId          String
-  name            String
-  icon            String   @default("💰")
-  color           String   @default("#3B82F6")
-  allocatedAmount Decimal  @default(0) @db.Decimal(15, 2)
-  spentAmount     Decimal  @default(0) @db.Decimal(15, 2)
-  isArchived      Boolean  @default(false)
-  sortOrder       Int      @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id               String   @id @default(cuid())
+  userId           String
+  name             String
+  icon             String   @default("💰")
+  color            String   @default("#3B82F6")
+  allocatedAmount  Decimal  @default(0) @db.Decimal(15, 2)
+  spentAmount      Decimal  @default(0) @db.Decimal(15, 2)
+  isArchived       Boolean  @default(false)
+  sortOrder        Int      @default(0)
+  lastAlertedLevel Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions          Transaction[]
@@ -210,11 +220,83 @@ model RecurringTransaction {
   @@map("recurring_transactions")
 }
 
+enum NotificationType {
+  BUDGET_ALERT
+  RECURRING_PROCESSED
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  link      String?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+enum HouseholdRole {
+  OWNER
+  MEMBER
+}
+
+// Read-only family sharing: members can view (not edit) each other's data.
+// Each member's own Account/Budget/Transaction ownership (userId) is unchanged.
+model Household {
+  id        String   @id @default(cuid())
+  name      String
+  ownerId   String
+  createdAt DateTime @default(now())
+
+  owner   User              @relation("HouseholdOwner", fields: [ownerId], references: [id])
+  members HouseholdMember[]
+  invites HouseholdInvite[]
+
+  @@map("households")
+}
+
+// userId is unique: a user belongs to at most one household at a time
+model HouseholdMember {
+  id          String        @id @default(cuid())
+  householdId String
+  userId      String        @unique
+  role        HouseholdRole @default(MEMBER)
+  joinedAt    DateTime      @default(now())
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("household_members")
+}
+
+// Shareable invite code (no email infra) — owner generates, sends manually, recipient redeems
+model HouseholdInvite {
+  id           String    @id @default(cuid())
+  householdId  String
+  code         String    @unique
+  createdById  String
+  expiresAt    DateTime
+  usedByUserId String?
+  usedAt       DateTime?
+  createdAt    DateTime  @default(now())
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@map("household_invites")
+}
+
 model AuditLog {
   id        String   @id @default(cuid())
   userId    String
-  action    String   // CREATE, UPDATE, DELETE, LOGIN, LOGOUT, IMPORT
-  entity    String   // Budget, Transaction, Transfer, etc.
+  action    String // CREATE, UPDATE, DELETE, LOGIN, LOGOUT, IMPORT
+  entity    String // Budget, Transaction, Transfer, etc.
   entityId  String?
   oldData   Json?
   newData   Json?

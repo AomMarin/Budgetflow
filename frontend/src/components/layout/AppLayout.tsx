@@ -10,7 +10,9 @@ const pageTitles: Record<string, string> = {
   '/transfers': 'Transfer Budget',
   '/reports': 'Reports',
   '/import': 'Import Statement',
+  '/household': 'Family Budget',
   '/settings': 'Settings',
+  '/admin': 'Admin',
 };
 
 export function AppLayout() {

@@ -12,10 +12,17 @@ import { TransfersPage } from './features/transfers/TransfersPage';
 import { ReportsPage } from './features/reports/ReportsPage';
 import { ImportsPage } from './features/imports/ImportsPage';
 import { SettingsPage } from './features/settings/SettingsPage';
+import { HouseholdPage } from './features/household/HouseholdPage';
+import { AdminPage } from './features/admin/AdminPage';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+}
+
+function RequireAdmin({ children }: { children: React.ReactNode }) {
+  const { user } = useAuthStore();
+  return user?.role === 'ADMIN' ? <>{children}</> : <Navigate to="/dashboard" replace />;
 }
 
 function RequireGuest({ children }: { children: React.ReactNode }) {
@@ -47,7 +54,9 @@ export default function App() {
         <Route path="transfers" element={<TransfersPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="import" element={<ImportsPage />} />
+        <Route path="household" element={<HouseholdPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="admin" element={<RequireAdmin><AdminPage /></RequireAdmin>} />
       </Route>
 
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

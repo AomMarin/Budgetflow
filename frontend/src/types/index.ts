@@ -1,8 +1,11 @@
+export type Role = 'USER' | 'ADMIN';
+
 export interface User {
   id: string;
   email: string;
   name: string;
   avatar?: string;
+  role: Role;
   currency: string;
   timezone: string;
   alertAt80: boolean;
@@ -95,6 +98,18 @@ export interface DashboardData {
   budgets: Budget[];
   recentTransactions: Transaction[];
   alerts: (Budget & { usagePercent: number })[];
+}
+
+export type NotificationType = 'BUDGET_ALERT' | 'RECURRING_PROCESSED';
+
+export interface Notification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  link?: string | null;
+  isRead: boolean;
+  createdAt: string;
 }
 
 export interface PaginationMeta {

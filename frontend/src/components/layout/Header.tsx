@@ -1,12 +1,10 @@
-import { Sun, Moon, Monitor, Bell, TrendingUp } from 'lucide-react';
+import { Sun, Moon, Monitor, TrendingUp } from 'lucide-react';
 import { useThemeStore, applyTheme } from '@/stores/theme.store';
-import { useDashboard } from '@/hooks/useDashboard';
+import { NotificationBell } from './NotificationBell';
 import { cn } from '@/utils/cn';
 
 export function Header({ title }: { title: string }) {
   const { theme, setTheme } = useThemeStore();
-  const { data } = useDashboard();
-  const alertCount = data?.alerts?.length ?? 0;
 
   const themeOptions = [
     { value: 'light' as const, icon: Sun },
@@ -26,15 +24,7 @@ export function Header({ title }: { title: string }) {
       </div>
 
       <div className="flex items-center gap-2">
-        {/* Alert indicator */}
-        {alertCount > 0 && (
-          <button className="relative p-2 text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-lg transition-colors">
-            <Bell className="w-5 h-5" />
-            <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
-              {alertCount}
-            </span>
-          </button>
-        )}
+        <NotificationBell />
 
         {/* Theme switcher */}
         <div className="flex items-center bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5 gap-0.5">

@@ -19,6 +19,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
       id: payload.userId,
       email: payload.email,
       name: payload.name,
+      role: payload.role,
     };
     next();
   } catch {

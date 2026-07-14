@@ -24,7 +24,7 @@ export const env = {
   JWT_ACCESS_EXPIRES_IN: optional('JWT_ACCESS_EXPIRES_IN', '15m'),
   JWT_REFRESH_EXPIRES_IN: optional('JWT_REFRESH_EXPIRES_IN', '7d'),
 
-  CORS_ORIGIN: optional('CORS_ORIGIN', 'http://localhost:5173'),
+  CORS_ORIGIN: optional('CORS_ORIGIN', 'http://localhost:5174'),
 
   UPLOAD_DIR: optional('UPLOAD_DIR', 'uploads'),
   MAX_FILE_SIZE: parseInt(optional('MAX_FILE_SIZE', '5242880'), 10),

@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Wallet, ArrowLeftRight, Receipt,
-  BarChart3, Upload, Settings, LogOut, TrendingUp,
+  BarChart3, Upload, Settings, LogOut, TrendingUp, ShieldCheck, Users,
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useAuthStore } from '@/stores/auth.store';
@@ -14,12 +14,17 @@ const navItems = [
   { to: '/transfers', icon: ArrowLeftRight, label: 'Transfers' },
   { to: '/reports', icon: BarChart3, label: 'Reports' },
   { to: '/import', icon: Upload, label: 'Import' },
+  { to: '/household', icon: Users, label: 'Family Budget' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 
 export function Sidebar() {
   const { user } = useAuthStore();
   const logout = useLogout();
+
+  const items = user?.role === 'ADMIN'
+    ? [...navItems, { to: '/admin', icon: ShieldCheck, label: 'Admin' }]
+    : navItems;
 
   return (
     <aside className="hidden md:flex flex-col w-64 bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800 h-screen sticky top-0">
@@ -36,7 +41,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-        {navItems.map(({ to, icon: Icon, label }) => (
+        {items.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}

@@ -8,5 +8,6 @@ router.use(authenticate);
 
 router.get('/monthly', controller.getMonthly);
 router.get('/yearly', controller.getYearly);
+router.get('/insights', controller.getInsights);
 
 export default router;

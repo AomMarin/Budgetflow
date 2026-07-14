@@ -152,8 +152,35 @@ Auth routes (`/login`, `/register`) are guest-only; all others require auth via 
 - **`TransactionsPage.tsx`**: mobile แสดง card list แทน table เพื่อไม่ต้อง scroll นอน
 - **`vite.config.ts`**: เพิ่ม `host: true` เพื่อให้เข้าถึงจากมือถือบน WiFi เดียวกันได้
 
+#### 5. Notifications + automation (real cron, ไม่ต้องพึ่ง dashboard mount)
+- **Schema**: `Notification` model + `NotificationType` enum (BUDGET_ALERT, RECURRING_PROCESSED), `Budget.lastAlertedLevel` (Int?) สำหรับ dedup
+- **Backend** `src/features/notifications/` (routes/controller/service/repository/dto มาตรฐาน 4 ไฟล์): `GET /notifications`, `GET /notifications/unread-count`, `PATCH /:id/read`, `PATCH /read-all`
+- **Backend** `budget.service.ts` `checkAlerts(userId)`: เทียบ `alertLevel` ปัจจุบัน (reuse `addStats()`) กับ `lastAlertedLevel` ที่เก็บไว้ — แจ้งเตือนเฉพาะตอน level สูงขึ้น, reset เป็น null เมื่อ usage ลดกลับต่ำกว่า 80% (กันแจ้งซ้ำ)
+- **Backend** `src/jobs/daily.job.ts` + `run-daily.ts`: cron จริงด้วย `node-cron` รันทุกวัน 00:05 Asia/Bangkok (registered ใน `server.ts`) — วนทุก user เรียก `RecurringService.process()` (ของเดิม, reuse) + `BudgetService.checkAlerts()` แล้วสร้าง Notification จริง มี `npm run job:daily` ไว้รันมือ/ทดสอบ
+- **Frontend** `NotificationBell.tsx` (แทนกระดิ่งเดิมใน `Header.tsx` ที่ผูกกับ `useDashboard().alerts` แบบไม่ persist) — unread badge, dropdown, mark-as-read, `useNotifications.ts` hook (poll unread-count ทุก 30s)
+
+#### 6. Deep insights (Reports page)
+- **Backend** `reports.service.ts` เพิ่ม `getForecast` (คาดการณ์ยอดใช้สิ้นเดือนต่อ budget จาก month-to-date transaction จริง ไม่ใช่ `Budget.spentAmount` เพราะ field นั้น lifetime-cumulative ไม่ reset รายเดือน), `getMonthOverMonth` (เทียบรายรับ/รายจ่าย/เงินออมกับเดือนก่อน), `getRecommendations` (แนะนำโยกงบจาก budget ที่เหลือเยอะไปช่วย budget ที่จะเกิน) รวมเป็น `getInsights` → `GET /reports/insights`
+- **Frontend** `ReportsPage.tsx` เพิ่มส่วน insights: stat card เทียบเดือนก่อน, progress bar คาดการณ์งบที่จะเกิน, การ์ดคำแนะนำพร้อมลิงก์ไป `/transfers`
+
+#### 7. PWA (installable)
+- **`vite-plugin-pwa`**: manifest + service worker (`registerType: 'autoUpdate'`), workbox `NetworkFirst` cache สำหรับ GET `/api/v1/(dashboard|budgets|accounts|reports)`
+- **`public/icon.svg`, `public/favicon.svg`** (ไฟล์ใหม่ — ของเดิมไม่มี public/ dir เลย ลิงก์ favicon เดิมเป็น broken link)
+
+#### 8. Family Budget — household sharing (read-only เท่านั้น)
+- ตัดสินใจแล้วว่าทำแบบ **read-only sharing** ไม่ใช่ pooled/shared budget ที่แก้ไขร่วมกันได้ — เพื่อเลี่ยง concurrent-write race condition และไม่ต้องแตะ zero-based invariant เดิม (ยังคิดจาก `userId` เดียวเหมือนเดิมทุกที่)
+- **Schema**: `Household` (ownerId), `HouseholdMember` (userId unique — 1 คนอยู่ได้ 1 household), `HouseholdInvite` (code เชิญ หมดอายุ 7 วัน, ไม่มี email infra เลยใช้ shareable code แทน)
+- **Backend** `src/features/households/`: create/invite/join(code)/removeMember/leave/deleteHousehold/getOverview — `getOverview` ไม่แตะ repository เดิมเลย แค่เรียก `DashboardService.getSummary(userId)` ซ้ำต่อสมาชิกแต่ละคนแล้วรวมผล (เขียนใหม่ทั้งหมด ไม่กระทบ Account/Budget/Transaction เดิม)
+- **Frontend** หน้าใหม่ `src/features/household/HouseholdPage.tsx` (ย้ายออกจาก Settings แล้ว) + เมนู "Family Budget" ใน `Sidebar.tsx` (ยังไม่ใส่ใน BottomNav เพราะเต็ม 5 ปุ่มแล้ว เหมือน Reports/Import/Admin)
+
+### Bug ที่เจอและแก้ระหว่างทาง (ไม่เกี่ยวกับ feature ใหม่)
+- **Rate limit ต่ำไป**: `RATE_LIMIT_MAX` เดิม 100 req/15min ต่อ IP ชนกับ dashboard/notification polling จริง ปรับเป็น 1000 ใน `.env`/`.env.example`
+- **`reports.service.ts` raw SQL bug**: query เดิมใช้ `WHERE user_id = ...` แต่ column จริงคือ `"userId"` (Prisma ไม่ได้ map field เป็น snake_case) ทำให้ `/reports/monthly` และ `/reports/yearly` 500 error มาตั้งแต่ commit แรก (กราฟ daily spending กับ yearly overview เงียบๆ ไม่เคยขึ้นเลย) — แก้เป็น `WHERE "userId" = ...` แล้ว
+
 ### สิ่งที่ยังไม่ได้ทำ / ปรับปรุงได้
 
-- Reports page charts ไม่แสดงใน headless browser (บนมือถือจริงแสดงปกติ)
-- BottomNav ไม่มีปุ่ม Reports และ Import (ใส่ได้แค่ 5 ปุ่ม เลือกเฉพาะหน้าหลัก)
+- BottomNav ไม่มีปุ่ม Reports, Import, Family Budget, Admin (ใส่ได้แค่ 5 ปุ่ม เลือกเฉพาะหน้าหลัก)
 - Transaction บนมือถือ ปุ่ม Delete ซ่อนไว้ (มีแค่ Edit) — กด Edit แล้วค่อยลบได้จาก form
+- Household ยัง read-only อย่างเดียว — ยังไม่มี shared/pooled budget ที่แก้ไขร่วมกันได้จริง (เคยประเมินไว้ว่าเสี่ยง race condition + ต้องแก้ invariant ทั้งระบบ ถ้าจะทำต้องคุยเรื่อง scope ใหม่)
+- Notification เป็น in-app เท่านั้น ยังไม่มี email/push จริง (ไม่มี SMTP/VAPID credentials)
+- Cron รันครั้งเดียวต่อวันตาม timezone เดียว (Asia/Bangkok) ไม่ได้ปรับตาม `User.timezone` ของแต่ละคน

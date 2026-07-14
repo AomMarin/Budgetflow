@@ -8,12 +8,13 @@ async function main() {
 
   const user = await prisma.user.upsert({
     where: { email: 'demo@budgetflow.app' },
-    update: {},
+    update: { role: 'ADMIN' },
     create: {
       email: 'demo@budgetflow.app',
       password: hashedPassword,
       name: 'Demo User',
       currency: 'THB',
+      role: 'ADMIN',
     },
   });
 
@@ -67,8 +68,10 @@ async function main() {
 
   for (let i = 0; i < defaultRules.length; i++) {
     const rule = defaultRules[i];
-    await prisma.importRule.create({
-      data: {
+    await prisma.importRule.upsert({
+      where: { userId_keyword: { userId: user.id, keyword: rule.keyword } },
+      update: { budgetId: budgets[rule.budgetIndex].id, priority: i },
+      create: {
         userId: user.id,
         keyword: rule.keyword,
         budgetId: budgets[rule.budgetIndex].id,

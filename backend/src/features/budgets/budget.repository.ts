@@ -58,6 +58,10 @@ export class BudgetRepository {
     });
   }
 
+  async updateAlertLevel(id: string, level: number | null): Promise<void> {
+    await prisma.budget.update({ where: { id }, data: { lastAlertedLevel: level } });
+  }
+
   async getTotalAllocated(userId: string): Promise<number> {
     const result = await prisma.budget.aggregate({
       where: { userId, isArchived: false },

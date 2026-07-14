@@ -1,11 +1,12 @@
 import { Request } from 'express';
-import { User } from '@prisma/client';
+import { User, Role } from '@prisma/client';
 
 export interface AuthenticatedRequest extends Request {
   user: {
     id: string;
     email: string;
     name: string;
+    role: Role;
   };
 }
 
@@ -40,6 +41,7 @@ export interface JwtPayload {
   userId: string;
   email: string;
   name: string;
+  role: Role;
   type: 'access' | 'refresh';
 }
 

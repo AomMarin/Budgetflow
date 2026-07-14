@@ -1,9 +1,10 @@
 import jwt from 'jsonwebtoken';
+import { Role } from '@prisma/client';
 import { env } from '../config/env';
 import { JwtPayload, TokenPair } from '../types';
 
-export function generateTokens(userId: string, email: string, name: string): TokenPair {
-  const payload: Omit<JwtPayload, 'type'> = { userId, email, name };
+export function generateTokens(userId: string, email: string, name: string, role: Role): TokenPair {
+  const payload: Omit<JwtPayload, 'type'> = { userId, email, name, role };
 
   const accessToken = jwt.sign(
     { ...payload, type: 'access' },

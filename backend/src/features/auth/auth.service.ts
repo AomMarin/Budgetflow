@@ -14,7 +14,7 @@ export class AuthService {
 
     const hashedPassword = await hashPassword(dto.password);
     const user = await this.repo.create({ ...dto, password: hashedPassword });
-    const tokens = generateTokens(user.id, user.email, user.name);
+    const tokens = generateTokens(user.id, user.email, user.name, user.role);
 
     return { user: this.sanitize(user), tokens };
   }
@@ -26,7 +26,7 @@ export class AuthService {
     const valid = await comparePassword(dto.password, user.password);
     if (!valid) throw Object.assign(new Error('Invalid credentials'), { status: 401 });
 
-    const tokens = generateTokens(user.id, user.email, user.name);
+    const tokens = generateTokens(user.id, user.email, user.name, user.role);
     return { user: this.sanitize(user), tokens };
   }
 
@@ -34,7 +34,7 @@ export class AuthService {
     const payload = verifyRefreshToken(token);
     const user = await this.repo.findById(payload.userId);
     if (!user) throw Object.assign(new Error('User not found'), { status: 401 });
-    return generateTokens(user.id, user.email, user.name);
+    return generateTokens(user.id, user.email, user.name, user.role);
   }
 
   async getProfile(userId: string): Promise<SafeUser> {

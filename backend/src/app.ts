@@ -20,6 +20,9 @@ import reportsRoutes from './features/reports/reports.routes';
 import importsRoutes from './features/imports/import.routes';
 import accountRoutes from './features/accounts/account.routes';
 import recurringRoutes from './features/recurring/recurring.routes';
+import adminRoutes from './features/admin/admin.routes';
+import notificationRoutes from './features/notifications/notification.routes';
+import householdRoutes from './features/households/household.routes';
 
 const app = express();
 
@@ -74,6 +77,9 @@ apiRouter.use('/dashboard', dashboardRoutes);
 apiRouter.use('/reports', reportsRoutes);
 apiRouter.use('/imports', importsRoutes);
 apiRouter.use('/recurring', recurringRoutes);
+apiRouter.use('/admin', adminRoutes);
+apiRouter.use('/notifications', notificationRoutes);
+apiRouter.use('/households', householdRoutes);
 
 app.use('/api/v1', apiRouter);
 
