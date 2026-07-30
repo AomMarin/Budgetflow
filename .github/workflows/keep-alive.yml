@@ -1,0 +1,14 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    - cron: '*/12 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      # TODO: replace with the real Render hostname once Phase 3 is deployed
+      # (Settings -> your-service -> URL, looks like https://budgetflow-backend-xxxx.onrender.com)
+      - run: curl -sf https://REPLACE-WITH-YOUR-RENDER-URL.onrender.com/health
