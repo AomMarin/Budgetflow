@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { HouseholdRepository } from './household.repository';
 import { CreateHouseholdDto, JoinHouseholdDto } from './household.dto';
 import { DashboardService } from '../dashboard/dashboard.service';
+import { prisma } from '../../config/database';
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -32,6 +33,7 @@ export class HouseholdService {
       id: membership.household.id,
       name: membership.household.name,
       myRole: membership.role,
+      poolEnabled: membership.household.poolUserId != null,
       members: members.map((m) => ({
         userId: m.user.id,
         name: m.user.name,
@@ -111,7 +113,28 @@ export class HouseholdService {
       this.forbidden('Only the household owner can delete the household');
     }
 
-    await this.repo.deleteHousehold(membership.householdId);
+    const poolUserId = membership.household.poolUserId;
+    if (poolUserId) {
+      const [account, allocated] = await Promise.all([
+        prisma.account.findFirst({ where: { userId: poolUserId, isDefault: true } }),
+        prisma.budget.aggregate({
+          where: { userId: poolUserId, isArchived: false },
+          _sum: { allocatedAmount: true },
+        }),
+      ]);
+      const balance = account ? Number(account.balance) : 0;
+      const totalAllocated = Number(allocated._sum.allocatedAmount ?? 0);
+      if (balance !== 0 || totalAllocated !== 0) {
+        this.badRequest('ถอนเงินและงบกลางทั้งหมดก่อนลบครอบครัว');
+      }
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.household.delete({ where: { id: membership.householdId } });
+      if (poolUserId) {
+        await tx.user.delete({ where: { id: poolUserId } });
+      }
+    });
   }
 
   async getOverview(userId: string) {

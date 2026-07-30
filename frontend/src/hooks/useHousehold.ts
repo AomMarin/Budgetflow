@@ -20,6 +20,7 @@ export interface Household {
   id: string;
   name: string;
   myRole: HouseholdRole;
+  poolEnabled: boolean;
   members: HouseholdMember[];
 }
 

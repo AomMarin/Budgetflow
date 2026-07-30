@@ -3,6 +3,7 @@ import * as controller from './household.controller';
 import { authenticate } from '../../middleware/auth.middleware';
 import { validate } from '../../middleware/validation.middleware';
 import { createHouseholdValidation, joinHouseholdValidation } from './household.validation';
+import poolRoutes from './pool/pool.routes';
 
 const router = Router();
 
@@ -16,5 +17,6 @@ router.post('/:id/invites', controller.createInvite);
 router.delete('/:id/members/:userId', controller.removeMember);
 router.post('/leave', controller.leave);
 router.delete('/mine', controller.remove);
+router.use('/pool', poolRoutes);
 
 export default router;

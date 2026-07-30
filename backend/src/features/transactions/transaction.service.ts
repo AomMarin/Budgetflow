@@ -23,7 +23,7 @@ export class TransactionService {
     return tx;
   }
 
-  async create(userId: string, dto: CreateTransactionDto) {
+  async create(userId: string, dto: CreateTransactionDto, actorUserId?: string) {
     const account = await prisma.account.findFirst({ where: { id: dto.accountId, userId } });
     if (!account) throw Object.assign(new Error('Account not found'), { status: 404 });
 
@@ -45,15 +45,19 @@ export class TransactionService {
     }
 
     const transaction = await prisma.$transaction(async (tx) => {
-      const created = await this.repo.create({
-        userId,
-        accountId: dto.accountId,
-        budgetId: dto.budgetId ?? null,
-        amount: dto.amount,
-        type: dto.type,
-        description: dto.description,
-        date: new Date(dto.date),
-      });
+      const created = await this.repo.create(
+        {
+          userId,
+          accountId: dto.accountId,
+          budgetId: dto.budgetId ?? null,
+          amount: dto.amount,
+          type: dto.type,
+          description: dto.description,
+          date: new Date(dto.date),
+          actorUserId,
+        },
+        tx,
+      );
 
       if (dto.type === 'INCOME') {
         await tx.account.update({
@@ -81,6 +85,13 @@ export class TransactionService {
 
   async update(id: string, userId: string, dto: UpdateTransactionDto) {
     const existing = await this.getById(id, userId);
+
+    if (existing.linkedTransactionId) {
+      throw Object.assign(
+        new Error('Cannot edit or delete a shared-pool contribution directly — reverse it instead'),
+        { status: 400 },
+      );
+    }
 
     const newType = dto.type ?? existing.type;
     const newBudgetId = dto.budgetId !== undefined ? dto.budgetId : existing.budgetId;
@@ -146,13 +157,18 @@ export class TransactionService {
         }
       }
 
-      return this.repo.update(id, userId, {
-        ...(dto.amount !== undefined && { amount: dto.amount }),
-        ...(dto.type !== undefined && { type: dto.type }),
-        ...(dto.description !== undefined && { description: dto.description }),
-        ...(dto.date !== undefined && { date: new Date(dto.date) }),
-        ...(dto.budgetId !== undefined && { budgetId: dto.budgetId }),
-      });
+      return this.repo.update(
+        id,
+        userId,
+        {
+          ...(dto.amount !== undefined && { amount: dto.amount }),
+          ...(dto.type !== undefined && { type: dto.type }),
+          ...(dto.description !== undefined && { description: dto.description }),
+          ...(dto.date !== undefined && { date: new Date(dto.date) }),
+          ...(dto.budgetId !== undefined && { budgetId: dto.budgetId }),
+        },
+        tx,
+      );
     });
   }
 
@@ -210,6 +226,13 @@ export class TransactionService {
   async delete(id: string, userId: string): Promise<void> {
     const existing = await this.getById(id, userId);
 
+    if (existing.linkedTransactionId) {
+      throw Object.assign(
+        new Error('Cannot edit or delete a shared-pool contribution directly — reverse it instead'),
+        { status: 400 },
+      );
+    }
+
     await prisma.$transaction(async (tx) => {
       if (existing.type === 'INCOME') {
         await tx.account.update({
@@ -229,7 +252,7 @@ export class TransactionService {
         }
       }
 
-      await this.repo.delete(id, userId);
+      await this.repo.delete(id, userId, tx);
     });
   }
 }

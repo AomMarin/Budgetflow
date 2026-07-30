@@ -2,6 +2,8 @@ import { Transaction, TransactionType, Prisma } from '@prisma/client';
 import { prisma } from '../../config/database';
 import { TransactionFilters } from './transaction.dto';
 
+type Db = Prisma.TransactionClient | typeof prisma;
+
 export class TransactionRepository {
   async findAll(userId: string, filters: TransactionFilters) {
     const { type, budgetId, startDate, endDate, search, page = 1, limit = 20 } = filters;
@@ -48,23 +50,23 @@ export class TransactionRepository {
     });
   }
 
-  async create(data: Prisma.TransactionUncheckedCreateInput) {
-    return prisma.transaction.create({
+  async create(data: Prisma.TransactionUncheckedCreateInput, db: Db = prisma) {
+    return db.transaction.create({
       data,
       include: { budget: { select: { id: true, name: true, icon: true, color: true } } },
     });
   }
 
-  async update(id: string, userId: string, data: Prisma.TransactionUpdateInput) {
-    return prisma.transaction.update({
+  async update(id: string, userId: string, data: Prisma.TransactionUpdateInput, db: Db = prisma) {
+    return db.transaction.update({
       where: { id, userId },
       data,
       include: { budget: { select: { id: true, name: true, icon: true, color: true } } },
     });
   }
 
-  async delete(id: string, userId: string) {
-    return prisma.transaction.delete({ where: { id, userId } });
+  async delete(id: string, userId: string, db: Db = prisma) {
+    return db.transaction.delete({ where: { id, userId } });
   }
 
   async getMonthlySummary(userId: string, year: number, month: number) {

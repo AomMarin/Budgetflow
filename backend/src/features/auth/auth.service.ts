@@ -21,7 +21,7 @@ export class AuthService {
 
   async login(dto: LoginDto): Promise<{ user: SafeUser; tokens: TokenPair }> {
     const user = await this.repo.findByEmail(dto.email);
-    if (!user) throw Object.assign(new Error('Invalid credentials'), { status: 401 });
+    if (!user || user.isPoolAccount) throw Object.assign(new Error('Invalid credentials'), { status: 401 });
 
     const valid = await comparePassword(dto.password, user.password);
     if (!valid) throw Object.assign(new Error('Invalid credentials'), { status: 401 });

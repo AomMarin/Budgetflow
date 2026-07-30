@@ -18,19 +18,20 @@ enum Role {
 }
 
 model User {
-  id         String   @id @default(cuid())
-  email      String   @unique
-  password   String
-  name       String
-  avatar     String?
-  role       Role     @default(USER)
-  currency   String   @default("THB")
-  timezone   String   @default("Asia/Bangkok")
-  alertAt80  Boolean  @default(true)
-  alertAt90  Boolean  @default(true)
-  alertAt100 Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id            String   @id @default(cuid())
+  email         String   @unique
+  password      String
+  name          String
+  avatar        String?
+  role          Role     @default(USER)
+  currency      String   @default("THB")
+  timezone      String   @default("Asia/Bangkok")
+  alertAt80     Boolean  @default(true)
+  alertAt90     Boolean  @default(true)
+  alertAt100    Boolean  @default(true)
+  isPoolAccount Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   accounts              Account[]
   budgets               Budget[]
@@ -44,6 +45,8 @@ model User {
   notifications         Notification[]
   ownedHouseholds       Household[]            @relation("HouseholdOwner")
   householdMembership   HouseholdMember?
+  actedTransactions     Transaction[]          @relation("TransactionActor")
+  poolOfHousehold       Household?             @relation("HouseholdPoolUser")
 
   @@map("users")
 }
@@ -124,9 +127,16 @@ model Transaction {
   budget     Budget?     @relation(fields: [budgetId], references: [id])
   importFile ImportFile? @relation(fields: [importFileId], references: [id])
 
+  actorUserId         String?
+  linkedTransactionId String?      @unique
+  actor               User?        @relation("TransactionActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  linkedTransaction   Transaction? @relation("TransactionLink", fields: [linkedTransactionId], references: [id], onDelete: SetNull)
+  linkedBy            Transaction? @relation("TransactionLink")
+
   @@index([userId, date])
   @@index([userId, type])
   @@index([budgetId])
+  @@index([actorUserId])
   @@map("transactions")
 }
 
@@ -250,14 +260,16 @@ enum HouseholdRole {
 // Read-only family sharing: members can view (not edit) each other's data.
 // Each member's own Account/Budget/Transaction ownership (userId) is unchanged.
 model Household {
-  id        String   @id @default(cuid())
-  name      String
-  ownerId   String
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  name       String
+  ownerId    String
+  poolUserId String?  @unique
+  createdAt  DateTime @default(now())
 
-  owner   User              @relation("HouseholdOwner", fields: [ownerId], references: [id])
-  members HouseholdMember[]
-  invites HouseholdInvite[]
+  owner    User              @relation("HouseholdOwner", fields: [ownerId], references: [id])
+  poolUser User?             @relation("HouseholdPoolUser", fields: [poolUserId], references: [id], onDelete: SetNull)
+  members  HouseholdMember[]
+  invites  HouseholdInvite[]
 
   @@map("households")
 }

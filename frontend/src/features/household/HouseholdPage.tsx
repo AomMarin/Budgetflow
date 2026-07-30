@@ -17,6 +17,7 @@ import {
   useLeaveHousehold,
   useDeleteHousehold,
 } from '@/hooks/useHousehold';
+import { PoolSection } from './pool/PoolSection';
 
 export function HouseholdPage() {
   const { user } = useAuthStore();
@@ -217,6 +218,8 @@ export function HouseholdPage() {
                 ))}
               </div>
             )}
+
+            <PoolSection household={household} />
 
             {isOwner && (
               <div className="pt-2 border-t border-gray-100 dark:border-gray-800">

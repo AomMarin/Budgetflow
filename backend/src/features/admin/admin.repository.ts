@@ -4,7 +4,7 @@ import { CreateUserDto, UpdateUserDto } from './admin.dto';
 
 export class AdminRepository {
   async findAll(): Promise<User[]> {
-    return prisma.user.findMany({ orderBy: { createdAt: 'desc' } });
+    return prisma.user.findMany({ where: { isPoolAccount: false }, orderBy: { createdAt: 'desc' } });
   }
 
   async findById(id: string): Promise<User | null> {
