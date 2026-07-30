@@ -27,3 +27,6 @@ Thumbs.db
 
 # Playwright / test artifacts
 scratchpad/
+
+# Local Claude Code tooling config
+.claude/
