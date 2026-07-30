@@ -43,10 +43,10 @@ export class TransferService {
         },
       });
 
-      // Debit from source (increase spent)
+      // Debit from source (decrease allocated — money moved, not spent)
       await tx.budget.update({
         where: { id: dto.fromBudgetId },
-        data: { spentAmount: { increment: dto.amount } },
+        data: { allocatedAmount: { decrement: dto.amount } },
       });
 
       // Credit to destination (increase allocated)
