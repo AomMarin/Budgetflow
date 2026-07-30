@@ -152,20 +152,6 @@ export class PoolService {
     });
     if (!fromAccount) this.notFound('Account not found');
 
-    if (dto.fromBudgetId) {
-      const budget = await prisma.budget.findFirst({
-        where: { id: dto.fromBudgetId, userId: actorUserId },
-      });
-      if (!budget) this.notFound('Budget not found');
-
-      const remaining = Number(budget.allocatedAmount) - Number(budget.spentAmount);
-      if (dto.amount > remaining) {
-        this.badRequest(
-          `งบ "${budget.name}" ไม่พอ — เหลือ ${remaining.toFixed(2)} บาท ขาด ${(dto.amount - remaining).toFixed(2)} บาท`,
-        );
-      }
-    }
-
     const poolAccount = await this.poolRepo.getPoolAccount(poolUserId);
     if (!poolAccount) this.notFound('Pool account not found');
 
@@ -173,6 +159,23 @@ export class PoolService {
     const poolDescription = `เงินสมทบจาก ${actor.name}`;
 
     return prisma.$transaction(async (tx) => {
+      if (dto.fromBudgetId) {
+        // Row-locked read: prevents two concurrent contributions from the same
+        // budget both passing the check against the same stale spentAmount.
+        const [budget] = await tx.$queryRaw<
+          Array<{ id: string; name: string; allocatedAmount: string; spentAmount: string }>
+        >`SELECT id, name, "allocatedAmount", "spentAmount" FROM budgets
+           WHERE id = ${dto.fromBudgetId} AND "userId" = ${actorUserId} FOR UPDATE`;
+        if (!budget) this.notFound('Budget not found');
+
+        const remaining = Number(budget.allocatedAmount) - Number(budget.spentAmount);
+        if (dto.amount > remaining) {
+          this.badRequest(
+            `งบ "${budget.name}" ไม่พอ — เหลือ ${remaining.toFixed(2)} บาท ขาด ${(dto.amount - remaining).toFixed(2)} บาท`,
+          );
+        }
+      }
+
       const memberTx = await tx.transaction.create({
         data: {
           userId: actorUserId,
