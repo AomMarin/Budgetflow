@@ -41,10 +41,11 @@ async function main() {
   ];
 
   const budgets = [];
-  for (const b of budgetData) {
-    const budget = await prisma.budget.create({
-      data: { userId: user.id, ...b, sortOrder: budgetData.indexOf(b) },
-    });
+  for (let i = 0; i < budgetData.length; i++) {
+    const b = budgetData[i];
+    const budget =
+      (await prisma.budget.findFirst({ where: { userId: user.id, name: b.name } })) ??
+      (await prisma.budget.create({ data: { userId: user.id, ...b, sortOrder: i } }));
     budgets.push(budget);
   }
 
