@@ -23,7 +23,7 @@ export class AdminService {
 
   async updateUser(currentUserId: string, id: string, dto: UpdateUserDto): Promise<SafeUser> {
     const user = await this.repo.findById(id);
-    if (!user) throw Object.assign(new Error('User not found'), { status: 404 });
+    if (!user || user.isPoolAccount) throw Object.assign(new Error('User not found'), { status: 404 });
 
     if (id === currentUserId && dto.role && dto.role !== 'ADMIN') {
       throw Object.assign(new Error('You cannot remove your own admin role'), { status: 400 });
@@ -44,7 +44,7 @@ export class AdminService {
       throw Object.assign(new Error('You cannot delete your own account'), { status: 400 });
     }
     const user = await this.repo.findById(id);
-    if (!user) throw Object.assign(new Error('User not found'), { status: 404 });
+    if (!user || user.isPoolAccount) throw Object.assign(new Error('User not found'), { status: 404 });
 
     await this.repo.delete(id);
   }
