@@ -3,6 +3,7 @@ import fs from 'fs';
 import { prisma } from '../../config/database';
 import { parseCsvFile, applyCategorizationRules } from '../../utils/csv-parser';
 import { buildPaginationMeta } from '../../utils/response';
+import { notifyBudgetAlerts } from '../../utils/budget-alerts';
 
 export class ImportService {
   async upload(userId: string, file: Express.Multer.File, accountId: string) {
@@ -99,6 +100,10 @@ export class ImportService {
         },
       });
     });
+
+    if (matchedCount > 0) {
+      await notifyBudgetAlerts(userId);
+    }
 
     // Clean up file
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);

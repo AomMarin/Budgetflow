@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { RecurringService } from './recurring.service';
 import { AuthenticatedRequest } from '../../types';
 import { sendSuccess, sendCreated, sendError } from '../../utils/response';
+import { notifyBudgetAlerts } from '../../utils/budget-alerts';
 
 const service = new RecurringService();
 
@@ -47,7 +48,11 @@ export async function remove(req: Request, res: Response, next: NextFunction): P
 
 export async function process(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const result = await service.process((req as AuthenticatedRequest).user.id);
+    const userId = (req as AuthenticatedRequest).user.id;
+    const result = await service.process(userId);
+    if (result.processed > 0) {
+      await notifyBudgetAlerts(userId);
+    }
     sendSuccess(res, result, result.processed > 0
       ? `Processed ${result.processed} recurring transaction(s)`
       : 'No recurring transactions due');

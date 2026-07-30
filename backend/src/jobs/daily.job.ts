@@ -1,12 +1,11 @@
 import { prisma } from '../config/database';
 import { RecurringService } from '../features/recurring/recurring.service';
-import { BudgetService } from '../features/budgets/budget.service';
 import { NotificationService } from '../features/notifications/notification.service';
+import { notifyBudgetAlerts } from '../utils/budget-alerts';
 import { logger } from '../utils/logger';
 
 export async function runDailyJob(): Promise<void> {
   const recurringService = new RecurringService();
-  const budgetService = new BudgetService();
   const notificationService = new NotificationService();
 
   const users = await prisma.user.findMany({ select: { id: true } });
@@ -24,19 +23,7 @@ export async function runDailyJob(): Promise<void> {
         });
       }
 
-      const triggered = await budgetService.checkAlerts(userId);
-      for (const alert of triggered) {
-        await notificationService.create({
-          userId,
-          type: 'BUDGET_ALERT',
-          title: `งบ "${alert.name}" ใช้ไปแล้ว ${alert.usagePercent}%`,
-          message:
-            alert.level >= 100
-              ? `งบ "${alert.name}" ใช้เกินที่จัดสรรไว้แล้ว กรุณาโยกงบจากกลุ่มอื่นก่อน`
-              : `งบ "${alert.name}" ใกล้เต็มงบ (${alert.usagePercent}%) กรุณาตรวจสอบ`,
-          link: '/budgets',
-        });
-      }
+      await notifyBudgetAlerts(userId);
     } catch (err) {
       logger.error(`Daily job failed for user ${userId}: ${(err as Error).message}`);
     }
