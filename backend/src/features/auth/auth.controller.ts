@@ -9,7 +9,10 @@ const service = new AuthService();
 const REFRESH_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: env.isProduction,
-  sameSite: 'strict' as const,
+  // 'none' is required once frontend and backend are on different origins
+  // (Vercel/Render) — browsers silently drop the cookie otherwise. Requires
+  // secure:true, which is already guaranteed by env.isProduction above.
+  sameSite: (env.isProduction ? 'none' : 'strict') as 'none' | 'strict',
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
 };
 

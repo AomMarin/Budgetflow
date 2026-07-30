@@ -26,6 +26,12 @@ import householdRoutes from './features/households/household.routes';
 
 const app = express();
 
+// Render (and most PaaS hosts) terminate TLS at a reverse proxy and forward
+// X-Forwarded-For — express-rate-limit needs this to rate-limit per real
+// client IP instead of collapsing everyone into the proxy's IP. Inert
+// locally (no proxy in front of dev).
+app.set('trust proxy', 1);
+
 // Security
 app.use(helmet());
 app.use(cors({

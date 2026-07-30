@@ -8,13 +8,18 @@ import { runDailyJob } from './jobs/daily.job';
 async function start() {
   await connectDatabase();
 
-  cron.schedule(
-    '5 0 * * *',
-    () => {
-      runDailyJob().catch((err) => logger.error(`Daily job failed: ${err}`));
-    },
-    { timezone: 'Asia/Bangkok' },
-  );
+  // In production the daily job runs via a separate GitHub Actions
+  // schedule (independent of whether this instance is asleep) — only
+  // run it in-process when explicitly opted into (local dev).
+  if (process.env.ENABLE_IN_PROCESS_CRON === 'true') {
+    cron.schedule(
+      '5 0 * * *',
+      () => {
+        runDailyJob().catch((err) => logger.error(`Daily job failed: ${err}`));
+      },
+      { timezone: 'Asia/Bangkok' },
+    );
+  }
 
   const server = app.listen(env.PORT, () => {
     logger.info(`🚀 BudgetFlow API running on http://localhost:${env.PORT}`);
