@@ -64,8 +64,8 @@ export class BudgetRepository {
     await prisma.budget.update({ where: { id }, data: { lastAlertedLevel: level } });
   }
 
-  async getTotalAllocated(userId: string): Promise<number> {
-    const result = await prisma.budget.aggregate({
+  async getTotalAllocated(userId: string, db: Db = prisma): Promise<number> {
+    const result = await db.budget.aggregate({
       where: { userId, isArchived: false },
       _sum: { allocatedAmount: true },
     });

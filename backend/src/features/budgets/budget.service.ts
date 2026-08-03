@@ -1,4 +1,4 @@
-import { Budget } from '@prisma/client';
+import { Budget, Prisma } from '@prisma/client';
 import { BudgetRepository } from './budget.repository';
 import { CreateBudgetDto, UpdateBudgetDto, AllocateIncomeDto } from './budget.dto';
 import { prisma } from '../../config/database';
@@ -23,17 +23,34 @@ export class BudgetService {
     return this.addStats(budget);
   }
 
+  // Per-user mutex for the Sigma(allocated) <= Sigma(balance) invariant check.
+  // Row-level FOR UPDATE on the existing budgets/accounts can't guard this by
+  // itself: a newly INSERTed budget row is invisible to a concurrent
+  // transaction's locked SELECT until it commits (phantom read), so two
+  // concurrent creates can each pass the check against the same stale totals.
+  // Locking a stable, always-existing key (hash of userId) forces the second
+  // transaction to fully wait, then re-read fresh totals that include the
+  // first transaction's committed row.
+  private async lockUser(tx: Prisma.TransactionClient, userId: string): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId})::bigint)`;
+  }
+
+  private async getTotalBalance(userId: string, db: Prisma.TransactionClient | typeof prisma = prisma): Promise<number> {
+    const result = await db.account.aggregate({
+      where: { userId },
+      _sum: { balance: true },
+    });
+    return Number(result._sum.balance ?? 0);
+  }
+
   async create(userId: string, dto: CreateBudgetDto): Promise<BudgetWithStats> {
     const budget = await prisma.$transaction(async (tx) => {
-      // Row-locked reads: prevents two concurrent creates/updates from both
-      // passing the check against the same stale allocated/balance totals.
-      const budgetRows = await tx.$queryRaw<Array<{ allocatedAmount: string }>>`
-        SELECT "allocatedAmount" FROM budgets WHERE "userId" = ${userId} AND "isArchived" = false FOR UPDATE`;
-      const accountRows = await tx.$queryRaw<Array<{ balance: string }>>`
-        SELECT balance FROM accounts WHERE "userId" = ${userId} FOR UPDATE`;
+      await this.lockUser(tx, userId);
 
-      const totalAllocated = budgetRows.reduce((sum, b) => sum + Number(b.allocatedAmount), 0);
-      const totalBalance = accountRows.reduce((sum, a) => sum + Number(a.balance), 0);
+      const [totalAllocated, totalBalance] = await Promise.all([
+        this.repo.getTotalAllocated(userId, tx),
+        this.getTotalBalance(userId, tx),
+      ]);
       const available = totalBalance - totalAllocated;
       if (dto.allocatedAmount > available) {
         throw Object.assign(
@@ -48,19 +65,17 @@ export class BudgetService {
 
   async update(id: string, userId: string, dto: UpdateBudgetDto): Promise<BudgetWithStats> {
     const budget = await prisma.$transaction(async (tx) => {
-      const [existingRow] = await tx.$queryRaw<Array<{ allocatedAmount: string }>>`
-        SELECT "allocatedAmount" FROM budgets WHERE id = ${id} AND "userId" = ${userId} FOR UPDATE`;
-      if (!existingRow) throw Object.assign(new Error('Budget not found'), { status: 404 });
+      await this.lockUser(tx, userId);
+
+      const existing = await tx.budget.findFirst({ where: { id, userId } });
+      if (!existing) throw Object.assign(new Error('Budget not found'), { status: 404 });
 
       if (dto.allocatedAmount !== undefined) {
-        const budgetRows = await tx.$queryRaw<Array<{ allocatedAmount: string }>>`
-          SELECT "allocatedAmount" FROM budgets WHERE "userId" = ${userId} AND "isArchived" = false FOR UPDATE`;
-        const accountRows = await tx.$queryRaw<Array<{ balance: string }>>`
-          SELECT balance FROM accounts WHERE "userId" = ${userId} FOR UPDATE`;
-
-        const totalAllocated = budgetRows.reduce((sum, b) => sum + Number(b.allocatedAmount), 0);
-        const totalBalance = accountRows.reduce((sum, a) => sum + Number(a.balance), 0);
-        const available = totalBalance - (totalAllocated - Number(existingRow.allocatedAmount));
+        const [totalAllocated, totalBalance] = await Promise.all([
+          this.repo.getTotalAllocated(userId, tx),
+          this.getTotalBalance(userId, tx),
+        ]);
+        const available = totalBalance - (totalAllocated - Number(existing.allocatedAmount));
         if (dto.allocatedAmount > available) {
           throw Object.assign(
             new Error(`จัดสรรเกินยอดคงเหลือ จัดสรรได้สูงสุด ${available.toFixed(2)} บาท`),

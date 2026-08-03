@@ -70,32 +70,34 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = (req as AuthenticatedRequest).user.id;
-      const account = await prisma.account.findFirst({
-        where: { userId, isDefault: true },
-      });
-      if (!account) {
-        res.status(404).json({ success: false, message: 'Default account not found' });
-        return;
-      }
 
-      const [totalAllocated, balanceAgg] = await Promise.all([
-        budgetRepo.getTotalAllocated(userId),
-        prisma.account.aggregate({ where: { userId }, _sum: { balance: true } }),
-      ]);
-      const currentTotalBalance = Number(balanceAgg._sum.balance ?? 0);
-      const newTotalBalance = currentTotalBalance - Number(account.balance) + req.body.balance;
-      if (newTotalBalance < totalAllocated) {
-        res.status(400).json({
-          success: false,
-          message: `ยอดเงินใหม่ทำให้ยอดรวมในบัญชีน้อยกว่ายอดที่จัดสรรไว้แล้ว (จัดสรรแล้ว ${totalAllocated.toFixed(2)} บาท) กรุณาลดยอดจัดสรรงบก่อน`,
-        });
-        return;
-      }
+      const updated = await prisma.$transaction(async (tx) => {
+        // Same per-user advisory lock used by BudgetService create/update:
+        // FOR UPDATE on existing rows can't guard an aggregate check against
+        // a concurrent budget create (phantom row, invisible until commit).
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId})::bigint)`;
 
-      const updated = await prisma.account.update({
-        where: { id: account.id },
-        data: { balance: req.body.balance },
+        const account = await tx.account.findFirst({ where: { userId, isDefault: true } });
+        if (!account) throw Object.assign(new Error('Default account not found'), { status: 404 });
+
+        const [totalAllocated, balanceAgg] = await Promise.all([
+          budgetRepo.getTotalAllocated(userId, tx),
+          tx.account.aggregate({ where: { userId }, _sum: { balance: true } }),
+        ]);
+        const currentTotalBalance = Number(balanceAgg._sum.balance ?? 0);
+        const newTotalBalance = currentTotalBalance - Number(account.balance) + req.body.balance;
+        if (newTotalBalance < totalAllocated) {
+          throw Object.assign(
+            new Error(
+              `ยอดเงินใหม่ทำให้ยอดรวมในบัญชีน้อยกว่ายอดที่จัดสรรไว้แล้ว (จัดสรรแล้ว ${totalAllocated.toFixed(2)} บาท) กรุณาลดยอดจัดสรรงบก่อน`,
+            ),
+            { status: 400 },
+          );
+        }
+
+        return tx.account.update({ where: { id: account.id }, data: { balance: req.body.balance } });
       });
+
       sendSuccess(res, { account: updated }, 'Starting balance updated');
     } catch (err) {
       next(err);
