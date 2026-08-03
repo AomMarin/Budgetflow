@@ -6,6 +6,9 @@ import { AuthenticatedRequest } from '../../types';
 import { Request, Response, NextFunction } from 'express';
 import { body } from 'express-validator';
 import { validate } from '../../middleware/validation.middleware';
+import { BudgetRepository } from '../budgets/budget.repository';
+
+const budgetRepo = new BudgetRepository();
 
 const router = Router();
 
@@ -74,6 +77,21 @@ router.post(
         res.status(404).json({ success: false, message: 'Default account not found' });
         return;
       }
+
+      const [totalAllocated, balanceAgg] = await Promise.all([
+        budgetRepo.getTotalAllocated(userId),
+        prisma.account.aggregate({ where: { userId }, _sum: { balance: true } }),
+      ]);
+      const currentTotalBalance = Number(balanceAgg._sum.balance ?? 0);
+      const newTotalBalance = currentTotalBalance - Number(account.balance) + req.body.balance;
+      if (newTotalBalance < totalAllocated) {
+        res.status(400).json({
+          success: false,
+          message: `ยอดเงินใหม่ทำให้ยอดรวมในบัญชีน้อยกว่ายอดที่จัดสรรไว้แล้ว (จัดสรรแล้ว ${totalAllocated.toFixed(2)} บาท) กรุณาลดยอดจัดสรรงบก่อน`,
+        });
+        return;
+      }
+
       const updated = await prisma.account.update({
         where: { id: account.id },
         data: { balance: req.body.balance },

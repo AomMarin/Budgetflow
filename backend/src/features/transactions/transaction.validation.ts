@@ -17,6 +17,16 @@ export const updateTransactionValidation = [
   body('date').optional().isISO8601(),
 ];
 
+export const batchTransactionValidation = [
+  body('transactions').isArray({ min: 1 }).withMessage('transactions must be a non-empty array'),
+  body('transactions.*.accountId').isString().notEmpty().withMessage('Account ID is required'),
+  body('transactions.*.budgetId').optional({ nullable: true }).isString(),
+  body('transactions.*.amount').isFloat({ min: 0.01 }).withMessage('Amount must be positive'),
+  body('transactions.*.type').isIn(['INCOME', 'EXPENSE']).withMessage('Type must be INCOME or EXPENSE'),
+  body('transactions.*.description').trim().isLength({ min: 1, max: 200 }).withMessage('Description is required'),
+  body('transactions.*.date').isISO8601().withMessage('Valid date is required'),
+];
+
 export const transactionQueryValidation = [
   query('type').optional().isIn(['INCOME', 'EXPENSE']),
   query('budgetId').optional().isString(),

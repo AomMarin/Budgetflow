@@ -181,9 +181,29 @@ export class TransactionService {
       if (!account) throw Object.assign(new Error(`Account ${accountId} not found`), { status: 404 });
     }
     const budgetIds = [...new Set(items.map((i) => i.budgetId).filter(Boolean) as string[])];
+    const budgetRemaining = new Map<string, { name: string; remaining: number }>();
     for (const budgetId of budgetIds) {
       const budget = await this.budgetRepo.findById(budgetId, userId);
       if (!budget) throw Object.assign(new Error(`Budget ${budgetId} not found`), { status: 404 });
+      budgetRemaining.set(budgetId, {
+        name: budget.name,
+        remaining: Number(budget.allocatedAmount) - Number(budget.spentAmount),
+      });
+    }
+
+    for (const dto of items) {
+      if (dto.type === 'EXPENSE' && dto.budgetId) {
+        const entry = budgetRemaining.get(dto.budgetId)!;
+        if (dto.amount > entry.remaining) {
+          throw Object.assign(
+            new Error(
+              `งบ "${entry.name}" ไม่พอ — เหลือ ${entry.remaining.toFixed(2)} บาท ขาด ${(dto.amount - entry.remaining).toFixed(2)} บาท กรุณาโยกงบจากกลุ่มอื่นก่อน`,
+            ),
+            { status: 400, code: 'BUDGET_INSUFFICIENT' },
+          );
+        }
+        entry.remaining -= dto.amount;
+      }
     }
 
     await prisma.$transaction(async (tx) => {

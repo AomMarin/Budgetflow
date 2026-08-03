@@ -6,6 +6,7 @@ import {
   createTransactionValidation,
   updateTransactionValidation,
   transactionQueryValidation,
+  batchTransactionValidation,
 } from './transaction.validation';
 
 const router = Router();
@@ -14,7 +15,7 @@ router.use(authenticate);
 
 router.get('/', transactionQueryValidation, validate, controller.getAll);
 router.post('/', createTransactionValidation, validate, controller.create);
-router.post('/batch', controller.batchCreate);
+router.post('/batch', batchTransactionValidation, validate, controller.batchCreate);
 router.get('/:id', controller.getById);
 router.patch('/:id', updateTransactionValidation, validate, controller.update);
 router.delete('/:id', controller.remove);
