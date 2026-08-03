@@ -121,6 +121,7 @@ export function usePoolContribute() {
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       qc.invalidateQueries({ queryKey: ['transactions'] });
       qc.invalidateQueries({ queryKey: ['accounts'] });
+      qc.invalidateQueries({ queryKey: ['budgets'] });
       qc.invalidateQueries({ queryKey: HOUSEHOLD_OVERVIEW_KEY });
       toast.success('สมทบเงินเรียบร้อย');
     },
@@ -182,6 +183,7 @@ export function usePoolReverseContribution() {
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       qc.invalidateQueries({ queryKey: ['transactions'] });
       qc.invalidateQueries({ queryKey: ['accounts'] });
+      qc.invalidateQueries({ queryKey: ['budgets'] });
       qc.invalidateQueries({ queryKey: HOUSEHOLD_OVERVIEW_KEY });
       toast.success('ยกเลิกการสมทบเรียบร้อย');
     },

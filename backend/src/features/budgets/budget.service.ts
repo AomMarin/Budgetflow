@@ -12,14 +12,6 @@ export interface BudgetWithStats extends Budget {
 export class BudgetService {
   constructor(private readonly repo = new BudgetRepository()) {}
 
-  private async getTotalBalance(userId: string): Promise<number> {
-    const result = await prisma.account.aggregate({
-      where: { userId },
-      _sum: { balance: true },
-    });
-    return Number(result._sum.balance ?? 0);
-  }
-
   async getAll(userId: string): Promise<BudgetWithStats[]> {
     const budgets = await this.repo.findAll(userId);
     return budgets.map(this.addStats);
@@ -32,39 +24,53 @@ export class BudgetService {
   }
 
   async create(userId: string, dto: CreateBudgetDto): Promise<BudgetWithStats> {
-    const [totalAllocated, totalBalance] = await Promise.all([
-      this.repo.getTotalAllocated(userId),
-      this.getTotalBalance(userId),
-    ]);
-    const available = totalBalance - totalAllocated;
-    if (dto.allocatedAmount > available) {
-      throw Object.assign(
-        new Error(`จัดสรรเกินยอดคงเหลือ จัดสรรได้อีก ${available.toFixed(2)} บาท`),
-        { status: 400 },
-      );
-    }
-    const budget = await this.repo.create(userId, dto);
+    const budget = await prisma.$transaction(async (tx) => {
+      // Row-locked reads: prevents two concurrent creates/updates from both
+      // passing the check against the same stale allocated/balance totals.
+      const budgetRows = await tx.$queryRaw<Array<{ allocatedAmount: string }>>`
+        SELECT "allocatedAmount" FROM budgets WHERE "userId" = ${userId} AND "isArchived" = false FOR UPDATE`;
+      const accountRows = await tx.$queryRaw<Array<{ balance: string }>>`
+        SELECT balance FROM accounts WHERE "userId" = ${userId} FOR UPDATE`;
+
+      const totalAllocated = budgetRows.reduce((sum, b) => sum + Number(b.allocatedAmount), 0);
+      const totalBalance = accountRows.reduce((sum, a) => sum + Number(a.balance), 0);
+      const available = totalBalance - totalAllocated;
+      if (dto.allocatedAmount > available) {
+        throw Object.assign(
+          new Error(`จัดสรรเกินยอดคงเหลือ จัดสรรได้อีก ${available.toFixed(2)} บาท`),
+          { status: 400 },
+        );
+      }
+      return this.repo.create(userId, dto, tx);
+    });
     return this.addStats(budget);
   }
 
   async update(id: string, userId: string, dto: UpdateBudgetDto): Promise<BudgetWithStats> {
-    const existing = await this.getById(id, userId);
+    const budget = await prisma.$transaction(async (tx) => {
+      const [existingRow] = await tx.$queryRaw<Array<{ allocatedAmount: string }>>`
+        SELECT "allocatedAmount" FROM budgets WHERE id = ${id} AND "userId" = ${userId} FOR UPDATE`;
+      if (!existingRow) throw Object.assign(new Error('Budget not found'), { status: 404 });
 
-    if (dto.allocatedAmount !== undefined) {
-      const [totalAllocated, totalBalance] = await Promise.all([
-        this.repo.getTotalAllocated(userId),
-        this.getTotalBalance(userId),
-      ]);
-      const available = totalBalance - (totalAllocated - Number(existing.allocatedAmount));
-      if (dto.allocatedAmount > available) {
-        throw Object.assign(
-          new Error(`จัดสรรเกินยอดคงเหลือ จัดสรรได้สูงสุด ${available.toFixed(2)} บาท`),
-          { status: 400 },
-        );
+      if (dto.allocatedAmount !== undefined) {
+        const budgetRows = await tx.$queryRaw<Array<{ allocatedAmount: string }>>`
+          SELECT "allocatedAmount" FROM budgets WHERE "userId" = ${userId} AND "isArchived" = false FOR UPDATE`;
+        const accountRows = await tx.$queryRaw<Array<{ balance: string }>>`
+          SELECT balance FROM accounts WHERE "userId" = ${userId} FOR UPDATE`;
+
+        const totalAllocated = budgetRows.reduce((sum, b) => sum + Number(b.allocatedAmount), 0);
+        const totalBalance = accountRows.reduce((sum, a) => sum + Number(a.balance), 0);
+        const available = totalBalance - (totalAllocated - Number(existingRow.allocatedAmount));
+        if (dto.allocatedAmount > available) {
+          throw Object.assign(
+            new Error(`จัดสรรเกินยอดคงเหลือ จัดสรรได้สูงสุด ${available.toFixed(2)} บาท`),
+            { status: 400 },
+          );
+        }
       }
-    }
 
-    const budget = await this.repo.update(id, userId, dto);
+      return this.repo.update(id, userId, dto, tx);
+    });
     return this.addStats(budget);
   }
 

@@ -2,6 +2,8 @@ import { Budget, Prisma } from '@prisma/client';
 import { prisma } from '../../config/database';
 import { CreateBudgetDto, UpdateBudgetDto } from './budget.dto';
 
+type Db = Prisma.TransactionClient | typeof prisma;
+
 export class BudgetRepository {
   async findAll(userId: string): Promise<Budget[]> {
     return prisma.budget.findMany({
@@ -14,15 +16,15 @@ export class BudgetRepository {
     return prisma.budget.findFirst({ where: { id, userId } });
   }
 
-  async create(userId: string, data: CreateBudgetDto): Promise<Budget> {
-    const count = await prisma.budget.count({ where: { userId } });
-    return prisma.budget.create({
+  async create(userId: string, data: CreateBudgetDto, db: Db = prisma): Promise<Budget> {
+    const count = await db.budget.count({ where: { userId } });
+    return db.budget.create({
       data: { ...data, userId, sortOrder: count },
     });
   }
 
-  async update(id: string, userId: string, data: UpdateBudgetDto): Promise<Budget> {
-    return prisma.budget.update({ where: { id, userId }, data });
+  async update(id: string, userId: string, data: UpdateBudgetDto, db: Db = prisma): Promise<Budget> {
+    return db.budget.update({ where: { id, userId }, data });
   }
 
   async archive(id: string, userId: string): Promise<Budget> {

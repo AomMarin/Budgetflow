@@ -14,21 +14,26 @@ export class TransferService {
       throw Object.assign(new Error('Cannot transfer to the same budget'), { status: 400 });
     }
 
-    const fromBudget = await prisma.budget.findFirst({ where: { id: dto.fromBudgetId, userId } });
-    if (!fromBudget) throw Object.assign(new Error('Source budget not found'), { status: 404 });
-
-    const toBudget = await prisma.budget.findFirst({ where: { id: dto.toBudgetId, userId } });
-    if (!toBudget) throw Object.assign(new Error('Destination budget not found'), { status: 404 });
-
-    const fromRemaining = Number(fromBudget.allocatedAmount) - Number(fromBudget.spentAmount);
-    if (fromRemaining < dto.amount) {
-      throw Object.assign(
-        new Error(`Insufficient funds in "${fromBudget.name}". Available: ${fromRemaining}`),
-        { status: 400 },
-      );
-    }
-
     return prisma.$transaction(async (tx) => {
+      // Row-locked read: prevents two concurrent transfers from the same
+      // budget both passing the check against the same stale spentAmount.
+      const [fromBudget] = await tx.$queryRaw<
+        Array<{ id: string; name: string; allocatedAmount: string; spentAmount: string }>
+      >`SELECT id, name, "allocatedAmount", "spentAmount" FROM budgets
+         WHERE id = ${dto.fromBudgetId} AND "userId" = ${userId} FOR UPDATE`;
+      if (!fromBudget) throw Object.assign(new Error('Source budget not found'), { status: 404 });
+
+      const toBudget = await tx.budget.findFirst({ where: { id: dto.toBudgetId, userId } });
+      if (!toBudget) throw Object.assign(new Error('Destination budget not found'), { status: 404 });
+
+      const fromRemaining = Number(fromBudget.allocatedAmount) - Number(fromBudget.spentAmount);
+      if (fromRemaining < dto.amount) {
+        throw Object.assign(
+          new Error(`Insufficient funds in "${fromBudget.name}". Available: ${fromRemaining}`),
+          { status: 400 },
+        );
+      }
+
       const transfer = await tx.transfer.create({
         data: {
           userId,

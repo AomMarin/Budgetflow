@@ -24,27 +24,33 @@ export class TransactionService {
   }
 
   async create(userId: string, dto: CreateTransactionDto, actorUserId?: string) {
-    const account = await prisma.account.findFirst({ where: { id: dto.accountId, userId } });
-    if (!account) throw Object.assign(new Error('Account not found'), { status: 404 });
+    const transaction = await prisma.$transaction(async (tx) => {
+      // Row-locked reads: prevents a concurrent expense against the same
+      // budget from both passing the check against the same stale spentAmount.
+      const [account] = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM accounts WHERE id = ${dto.accountId} AND "userId" = ${userId} FOR UPDATE`;
+      if (!account) throw Object.assign(new Error('Account not found'), { status: 404 });
 
-    if (dto.budgetId) {
-      const budget = await this.budgetRepo.findById(dto.budgetId, userId);
-      if (!budget) throw Object.assign(new Error('Budget not found'), { status: 404 });
+      if (dto.budgetId) {
+        const [budget] = await tx.$queryRaw<
+          Array<{ id: string; name: string; allocatedAmount: string; spentAmount: string }>
+        >`SELECT id, name, "allocatedAmount", "spentAmount" FROM budgets
+           WHERE id = ${dto.budgetId} AND "userId" = ${userId} FOR UPDATE`;
+        if (!budget) throw Object.assign(new Error('Budget not found'), { status: 404 });
 
-      if (dto.type === 'EXPENSE') {
-        const remaining = Number(budget.allocatedAmount) - Number(budget.spentAmount);
-        if (dto.amount > remaining) {
-          throw Object.assign(
-            new Error(
-              `งบ "${budget.name}" ไม่พอ — เหลือ ${remaining.toFixed(2)} บาท ขาด ${(dto.amount - remaining).toFixed(2)} บาท กรุณาโยกงบจากกลุ่มอื่นก่อน`,
-            ),
-            { status: 400, code: 'BUDGET_INSUFFICIENT' },
-          );
+        if (dto.type === 'EXPENSE') {
+          const remaining = Number(budget.allocatedAmount) - Number(budget.spentAmount);
+          if (dto.amount > remaining) {
+            throw Object.assign(
+              new Error(
+                `งบ "${budget.name}" ไม่พอ — เหลือ ${remaining.toFixed(2)} บาท ขาด ${(dto.amount - remaining).toFixed(2)} บาท กรุณาโยกงบจากกลุ่มอื่นก่อน`,
+              ),
+              { status: 400, code: 'BUDGET_INSUFFICIENT' },
+            );
+          }
         }
       }
-    }
 
-    const transaction = await prisma.$transaction(async (tx) => {
       const created = await this.repo.create(
         {
           userId,
@@ -97,28 +103,33 @@ export class TransactionService {
     const newBudgetId = dto.budgetId !== undefined ? dto.budgetId : existing.budgetId;
     const newAmount = dto.amount ?? Number(existing.amount);
 
-    if (newType === 'EXPENSE' && newBudgetId) {
-      const budget = await this.budgetRepo.findById(newBudgetId, userId);
-      if (!budget) throw Object.assign(new Error('Budget not found'), { status: 404 });
-
-      const currentRemaining = Number(budget.allocatedAmount) - Number(budget.spentAmount);
-      // If the same budget, the old amount will be freed up after reversal
-      const oldContribution = (existing.type === 'EXPENSE' && existing.budgetId === newBudgetId)
-        ? Number(existing.amount)
-        : 0;
-      const effectiveRemaining = currentRemaining + oldContribution;
-
-      if (newAmount > effectiveRemaining) {
-        throw Object.assign(
-          new Error(
-            `งบ "${budget.name}" ไม่พอ — เหลือ ${effectiveRemaining.toFixed(2)} บาท ขาด ${(newAmount - effectiveRemaining).toFixed(2)} บาท กรุณาโยกงบจากกลุ่มอื่นก่อน`,
-          ),
-          { status: 400, code: 'BUDGET_INSUFFICIENT' },
-        );
-      }
-    }
-
     return prisma.$transaction(async (tx) => {
+      if (newType === 'EXPENSE' && newBudgetId) {
+        // Row-locked read: prevents a concurrent expense against the same
+        // budget from both passing the check against the same stale spentAmount.
+        const [budget] = await tx.$queryRaw<
+          Array<{ id: string; name: string; allocatedAmount: string; spentAmount: string }>
+        >`SELECT id, name, "allocatedAmount", "spentAmount" FROM budgets
+           WHERE id = ${newBudgetId} AND "userId" = ${userId} FOR UPDATE`;
+        if (!budget) throw Object.assign(new Error('Budget not found'), { status: 404 });
+
+        const currentRemaining = Number(budget.allocatedAmount) - Number(budget.spentAmount);
+        // If the same budget, the old amount will be freed up after reversal
+        const oldContribution = (existing.type === 'EXPENSE' && existing.budgetId === newBudgetId)
+          ? Number(existing.amount)
+          : 0;
+        const effectiveRemaining = currentRemaining + oldContribution;
+
+        if (newAmount > effectiveRemaining) {
+          throw Object.assign(
+            new Error(
+              `งบ "${budget.name}" ไม่พอ — เหลือ ${effectiveRemaining.toFixed(2)} บาท ขาด ${(newAmount - effectiveRemaining).toFixed(2)} บาท กรุณาโยกงบจากกลุ่มอื่นก่อน`,
+            ),
+            { status: 400, code: 'BUDGET_INSUFFICIENT' },
+          );
+        }
+      }
+
       // Reverse old effects
       if (existing.type === 'INCOME') {
         await tx.account.update({
