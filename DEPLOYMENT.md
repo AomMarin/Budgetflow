@@ -33,6 +33,16 @@
 4. Postman 422 Validation failed → ลืมเปลี่ยน body type จาก Text เป็น JSON
 5. Login ไม่ได้หลังแก้ password ใน Neon ตรงๆ → column `password` เก็บ bcrypt hash แก้มือไม่ได้ ต้อง seed ใหม่
 6. `VITE_API_URL` fallback ใช้ `??` แทน `||` → `.env.example` มีค่าว่าง (`VITE_API_URL=`) ทำให้ไม่ fallback (ดูรายละเอียดใน section ของ Claude ด้านล่าง — commit `98ae8a4`)
+7. `POST /accounts/setup-balance` ตอบ 404 บน production → **ไม่ใช่ route หาย** (route ตรวจแล้วมีอยู่จริง ยิงตรงไป production พบ 401 ตอนไม่มี token ไม่ใช่ 404) แต่เป็น application-level 404 ที่ route โยนเองตอนหา default account ไม่เจอ (`account.routes.ts` — `if (!account) throw ... status: 404`) สาเหตุจริงคือ `seed.ts` เดิม upsert account ด้วย `update: {}` (no-op) พอเปลี่ยน seed จาก `demo@budgetflow.app` เป็น `admin@budgetflow.app` (commit `2d3dfef`) แล้วรัน seed ซ้ำ แถว account id คงที่ `demo-account-id` ที่มีอยู่แล้วเลยไม่ถูกผูก `userId` ใหม่ให้ admin user — ยืนยันจริงบน production ด้วย `GET /accounts` (login ด้วย admin) ได้ `accounts: []` แก้แล้วที่ `seed.ts` (commit `9e145b9`, เปลี่ยน `update: {}` → `update: { userId: user.id }`) — **ต้องรัน `db:seed` ใหม่บน production เองด้วยมือเพื่อให้ data จริงถูกแก้** (ดูหัวข้อ "รัน seed ใหม่บน production" ด้านล่าง — ยังไม่ได้รันตอนเขียนบันทึกนี้)
+
+## เมื่อไหร่ต้องรัน `db:seed` ใหม่บน production ด้วยมือ
+
+Render build command (`npm ci && npm run build && npm run db:migrate:prod`) รันแค่ `prisma migrate deploy` เท่านั้น **ไม่รัน seed ให้อัตโนมัติ** ต้องรันเองทุกครั้งที่:
+- แก้ `backend/prisma/seed.ts` แล้วต้องการให้ผลบน production ตรงกับ local (เช่นบั๊กนี้ — แก้โค้ด seed ไม่ได้แปลว่า data บน production ถูกแก้ไปด้วย)
+- หลัง `prisma migrate reset` หรือสร้าง Neon database ใหม่ (schema ว่างเปล่า ไม่มี seed data เลย)
+- หลัง data migration ที่ลบ/ย้าย user หรือ account ที่ seed ผูกไว้ (เช่นเปลี่ยน seed email แล้วของเดิมยังอยู่ใน DB)
+
+**วิธีรัน** (ดูรายละเอียดคำสั่งเต็มในรอบ 2026-08-04 ด้านล่าง): set `DATABASE_URL` ของ production ใน shell session ชั่วคราว (`$env:DATABASE_URL = "..."` ใน PowerShell) แล้ว `npm run db:seed` จาก `backend/` — **ห้าม**เขียน production `DATABASE_URL` ลงไฟล์ที่ commit เข้า repo ไม่ว่ากรณีใด
 
 ## ที่ยังค้างอยู่
 
@@ -41,6 +51,7 @@
 - [ ] เปลี่ยน demo account เป็น email/name ที่เหมาะสมกว่า (เริ่มทำแล้วบางส่วน — ดู commit `2d3dfef`)
 - [ ] node-cron ไม่ทำงานจริงบน Render free tier (spin down 15 นาที) — พึ่ง GitHub Actions แทน
 - [ ] `uploads/` เป็น ephemeral ไฟล์หายทุก deploy
+- [ ] รัน `npm run db:seed` บน production (Neon) เพื่อ apply commit `9e145b9` จริง — แก้โค้ดแล้วแต่ data บน production ยังไม่ถูกแก้ (admin user ยัง `accounts: []` ตอนเขียนบันทึกนี้)
 
 ---
 
@@ -135,3 +146,30 @@
 
 - ไม่ได้ใส่ wake-notice ในหน้าอื่นนอกจาก Login/Register — ถ้าพบว่า user เปิดแอปทิ้งไว้นานจน token หมดอายุพอดีตอน backend หลับ (ดู "Render free tier cold start" ในหมายเหตุก่อนหน้า, ยังไม่เคยทดสอบจริง) ค่อยพิจารณาเพิ่มใน `AppLayout` หรือจุดที่ silent-refresh เกิดขึ้น
 - ยังไม่ได้ลบ instance-hours ที่ใช้ไปแล้วจาก keep-alive เดิม (ข้อมูลนี้อยู่ฝั่ง Render dashboard เท่านั้น ไม่ใช่สิ่งที่แก้ผ่านโค้ดได้)
+
+---
+
+## รอบ 2026-08-04 (ต่อ) — แก้ `setup-balance` 404 (seed.ts data bug)
+
+**อาการ**: user รายงานว่า `POST /accounts/setup-balance` ตอบ 404 บน production
+
+**ตรวจแล้วพบว่าไม่ใช่ routing bug**: ยิง curl ตรงไป `https://budgetflow-wpdg.onrender.com/api/v1/accounts/setup-balance` แบบไม่มี token ได้ **401** `"No token provided"` (ไม่ใช่ 404) — พิสูจน์ว่า route ถูก mount ถูกต้อง จากนั้น login ด้วย `admin@budgetflow.app` (account จริงบน production) แล้วยิง `GET /accounts` ได้ `{"accounts": []}` — user นี้ไม่มี account เลย ทำให้ route โยน 404 ที่ตัวเองมี guard ไว้อยู่แล้ว (`account.routes.ts`: `if (!account) throw ... status: 404` เมื่อหา default account ไม่เจอ)
+
+**Root cause**: `seed.ts` เดิม `prisma.account.upsert({ where: { id: 'demo-account-id' }, update: {}, ... })` — เมื่อเปลี่ยน seed target email จาก `demo@budgetflow.app` เป็น `admin@budgetflow.app` (commit `2d3dfef`) แล้วรัน seed ซ้ำ แถว `demo-account-id` ที่มีอยู่แล้ว (ผูกกับ user เก่า) ไม่ถูกอัปเดต `userId` ให้ตรงกับ user ใหม่เลย เพราะ `update: {}` เป็น no-op — ตรงกับความเสี่ยงที่เคยจดไว้แล้วในบันทึกของ commit `2d3dfef` ด้านบนแต่ไม่เคยแก้จริง
+
+**Fix (commit `9e145b9`)**: `backend/prisma/seed.ts` เปลี่ยน `update: {}` → `update: { userId: user.id }` — ทำให้ seed รันซ้ำกี่ครั้งก็ rebind account ให้ user เป้าหมายปัจจุบันเสมอ
+
+**สิ่งที่ยังไม่ได้ทำ**: แก้แค่โค้ด `seed.ts` เท่านั้น — **data จริงบน production ยังไม่ถูกแก้** (admin user ยัง `accounts: []` อยู่จนกว่าจะรัน `npm run db:seed` จริงบน production) เพราะ Render build command (`npm ci && npm run build && npm run db:migrate:prod`) รันแค่ `prisma migrate deploy` ไม่รัน seed ให้ ต้องรันมือ:
+
+```powershell
+cd backend
+$env:DATABASE_URL = "<production DATABASE_URL จาก Render dashboard → Environment>"
+npm run db:seed
+Remove-Item Env:\DATABASE_URL
+```
+
+ตรวจแล้ว: `tsx prisma/seed.ts` (คำสั่งจริงเบื้องหลัง `db:seed`) **ไม่** auto-load `.env` เอง (ทดสอบด้วย `npx tsx -e "console.log(!!process.env.DATABASE_URL)"` แบบไม่ set อะไรได้ `false`) — ต้อง set `DATABASE_URL` เองเสมอเวลารันตรงๆ แบบนี้ ไม่พึ่งพา auto-load ใดๆ
+
+**ไม่ต้อง clear browser localStorage**: `budgetflow-auth` เก็บแค่ `{ user, accessToken, isAuthenticated }` ไม่มี account/budget data ติดมา และ accounts/budgets ฝั่ง frontend ดึงสดผ่าน TanStack Query ทุกครั้งที่โหลดหน้า (ไม่ persist) ส่วน PWA service worker cache ใช้ `NetworkFirst` (ลองยิง network ก่อนเสมอ) เพราะงั้น refresh หน้าเปล่าธรรมดาก็เห็นผลลัพธ์ใหม่ทันที ไม่ต้อง logout/clear storage
+
+**ผลข้างเคียงที่ต้องรู้ก่อนรัน seed จริง**: `seed.ts` ไม่ได้แก้แค่ account — ยังมี budget upsert (`findFirst`-or-`create`, idempotent) และ import rule upsert (unique by keyword, idempotent) ถ้า admin user ปัจจุบันยังไม่มี budget เลย รัน seed จะสร้าง 7 budget ตัวอย่าง (Food & Dining ฿6,000 ฯลฯ) ติดมาด้วย ควรเช็ค `GET /budgets` ก่อนถ้าไม่อยากได้ข้อมูลตัวอย่างติดมา
