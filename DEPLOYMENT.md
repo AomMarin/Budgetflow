@@ -107,5 +107,31 @@
 1. แก้ `CORS_ORIGIN` ให้ตรง Vercel domain จริงก่อน แล้วค่อย verify login ผ่าน frontend จริงอีกรอบ (ไม่ใช่แค่ curl ตรงไป backend)
 2. เช็ค GitHub Actions secret `DATABASE_URL` ให้ตรงกับ Neon connection string ปัจจุบันพร้อมกับตอนเปลี่ยนรหัส Neon (todo ข้อแรก) — สองที่ต้องอัปเดตพร้อมกันเสมอ (Render env var + GH secret)
 3. ถ้าจะ re-seed production ด้วย `seed.ts` เวอร์ชันใหม่ (`admin@budgetflow.app`) ต้องคิดเรื่อง data migration ของ `demo-account-id` ก่อน ไม่งั้น admin user ใหม่จะไม่มีข้อมูลติดมา
-4. พิจารณาเพิ่ม uptime ping (เช่น cron-job.org / UptimeRobot ยิง `/health` ทุก ~10 นาที) ถ้าไม่อยากให้ Render free tier spin down บ่อย — แลกกับ free tier compute hours ที่จะใช้เพิ่ม
+4. ~~พิจารณาเพิ่ม uptime ping~~ — **กลับคำแนะนำนี้แล้ว** ดูรอบ 2026-08-04 ด้านล่าง: ping ทุก ~10 นาทีกิน instance hours เกือบเต็มโควต้า 750 ชม./เดือนของ Render free tier เปลี่ยนไปจัดการ cold start ที่ฝั่ง UX แทน
 5. ก่อนแก้ money-flow invariant logic (budget/transaction/transfer) ครั้งต่อไป ควรทดสอบด้วย concurrent request จริงเสมอ ไม่ใช่แค่ typecheck/lint/build ผ่าน — รอบนี้ `SELECT ... FOR UPDATE` ดูถูกต้องตอน review โค้ดเฉยๆ แต่มี concurrency bug จริงที่ manual test เจอ (ดู `6aa0a06`)
+
+---
+
+## รอบ 2026-08-04 — เลิกใช้ keep-alive ping, จัดการ cold start ที่ฝั่ง UX แทน
+
+**เหตุผลของการกลับคำแนะนำ**: `.github/workflows/keep-alive.yml` (เพิ่งแก้ URL ให้ถูกต้องไปเมื่อกี้ในคอมมิตก่อนหน้า) ยิง ping ทุก 10-12 นาที ตลอด 24 ชม. ตกราวๆ 700+ instance-hours/เดือน ซึ่งชนกับโควต้า free tier ของ Render ที่ 750 ชม./เดือนพอดี (ทุก service ในบัญชีรวมกัน ไม่ใช่แยกต่อ service) — ตัดสินใจว่าไม่คุ้มที่จะกิน quota เกือบเต็มเพื่อแก้ cold start จึงเปลี่ยนมายอมรับว่า cold start จะเกิดขึ้นได้ แล้วบอก user ตรงๆ แทน
+
+### ไฟล์ที่แก้
+
+- **ลบ `.github/workflows/keep-alive.yml`** — ไม่ ping Render อีกต่อไป
+- `.github/workflows/daily-job.yml` — ตรวจแล้ว **ไม่ต้องแก้**: ไม่ได้ curl ไป Render URL เลย รันผ่าน `actions/checkout` + `npm run job:daily` ตรงๆ ในตัว GitHub Actions runner (เชื่อม DB ตรงผ่าน `DATABASE_URL` secret) ไม่เกี่ยวกับ backend instance บน Render จึงไม่มี placeholder URL ให้แก้ และยังจำเป็นต้องมีอยู่ (budget alert + recurring transaction cron — ดูเหตุผลเดิมที่ `ENABLE_IN_PROCESS_CRON` ไม่ได้ตั้งบน Render)
+- `frontend/src/services/api.ts` — export `API_BASE_URL` ให้ import ซ้ำได้ (เดิม module-scope เข้าไม่ถึงจากไฟล์อื่น), เพิ่ม `timeout: 60000` ใน axios instance (เดิมไม่มี timeout เลย จะรอเฉยๆ จนกว่า browser จะตัดเองซึ่งบางเบราว์เซอร์ไม่ตัดเลย)
+- `frontend/src/services/warmup.ts` (ไฟล์ใหม่) — `warmUpBackend()` ยิง `fetch` แบบ fire-and-forget (catch เงียบ ไม่ log) ไปที่ `{API_BASE_URL ตัด /api/v1 ออก}/health` เพื่อเริ่มปลุก backend ตั้งแต่ผู้ใช้เปิดเว็บ ก่อนที่จะกด login ด้วยซ้ำ
+- `frontend/src/App.tsx` — เรียก `warmUpBackend()` ใน `useEffect` แยกต่างหาก (mount ครั้งเดียว, deps `[]`) แยกจาก effect เดิมที่ apply theme
+- `frontend/src/hooks/useWakeServerNotice.ts` (ไฟล์ใหม่) — hook รับ `isPending: boolean`, ถ้า pending ต่อเนื่องเกิน 3 วินาทีจะโชว์ `toast.loading(...)` (ข้อความไทย, id คงที่ `wake-server` กันซ้อน) ใช้ `react-hot-toast` ที่มีอยู่แล้วในโปรเจกต์ ไม่เพิ่ม dependency ใหม่ — dismiss อัตโนมัติทันทีที่ `isPending` เป็น false (กันไม่ให้ loading toast ค้างทับ success/error toast ของ `useLogin`/`useRegister`)
+- `frontend/src/features/auth/LoginPage.tsx`, `RegisterPage.tsx` — เรียก `useWakeServerNotice(login.isPending)` / `useWakeServerNotice(register.isPending)` เพราะเป็นสองหน้าที่มี API call แรกของ session จริงๆ (หน้าอื่นหลัง login ไปแล้ว backend มักตื่นแล้วจาก request login/warmup ก่อนหน้า)
+
+### ตรวจแล้ว
+
+- `cd frontend && npm run build` ผ่าน (tsc + vite build, PWA precache ปกติ) — warning เรื่อง chunk size >500kB เป็นของเดิม ไม่เกี่ยวกับรอบนี้
+- `warmUpBackend()` คำนวณ URL จาก `API_BASE_URL.replace(/\/api\/v1\/?$/, '')` แทนที่จะ hardcode host แยก เพื่อให้ตรงกับ backend เดียวกับที่ axios ยิงจริงเสมอ ไม่ต้องซิงค์ env var สองที่
+
+### ยังไม่ได้ทำ / ข้อสังเกต
+
+- ไม่ได้ใส่ wake-notice ในหน้าอื่นนอกจาก Login/Register — ถ้าพบว่า user เปิดแอปทิ้งไว้นานจน token หมดอายุพอดีตอน backend หลับ (ดู "Render free tier cold start" ในหมายเหตุก่อนหน้า, ยังไม่เคยทดสอบจริง) ค่อยพิจารณาเพิ่มใน `AppLayout` หรือจุดที่ silent-refresh เกิดขึ้น
+- ยังไม่ได้ลบ instance-hours ที่ใช้ไปแล้วจาก keep-alive เดิม (ข้อมูลนี้อยู่ฝั่ง Render dashboard เท่านั้น ไม่ใช่สิ่งที่แก้ผ่านโค้ดได้)

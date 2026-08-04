@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './stores/auth.store';
 import { useThemeStore, applyTheme } from './stores/theme.store';
+import { warmUpBackend } from './services/warmup';
 import { AppLayout } from './components/layout/AppLayout';
 import { LoginPage } from './features/auth/LoginPage';
 import { RegisterPage } from './features/auth/RegisterPage';
@@ -32,6 +33,10 @@ function RequireGuest({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const { theme } = useThemeStore();
+
+  useEffect(() => {
+    warmUpBackend();
+  }, []);
 
   useEffect(() => {
     applyTheme(theme);

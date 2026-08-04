@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { TrendingUp, Eye, EyeOff, Mail, Lock, User } from 'lucide-react';
 import { useRegister } from '@/hooks/useAuth';
+import { useWakeServerNotice } from '@/hooks/useWakeServerNotice';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 
@@ -11,6 +12,7 @@ export function RegisterPage() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const register = useRegister();
+  useWakeServerNotice(register.isPending);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
