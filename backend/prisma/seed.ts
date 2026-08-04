@@ -20,7 +20,7 @@ async function main() {
 
   const account = await prisma.account.upsert({
     where: { id: 'demo-account-id' },
-    update: {},
+    update: { userId: user.id },
     create: {
       id: 'demo-account-id',
       userId: user.id,
