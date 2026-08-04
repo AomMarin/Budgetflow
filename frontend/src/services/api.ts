@@ -19,7 +19,7 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 });
 
 let isRefreshing = false;
-let refreshQueue: ((token: string) => void)[] = [];
+let refreshQueue: { resolve: (token: string) => void; reject: (err: unknown) => void }[] = [];
 
 api.interceptors.response.use(
   (response) => response,
@@ -28,10 +28,13 @@ api.interceptors.response.use(
 
     if (error.response?.status === 401 && !originalRequest._retry) {
       if (isRefreshing) {
-        return new Promise((resolve) => {
-          refreshQueue.push((token) => {
-            originalRequest.headers.Authorization = `Bearer ${token}`;
-            resolve(api(originalRequest));
+        return new Promise((resolve, reject) => {
+          refreshQueue.push({
+            resolve: (token) => {
+              originalRequest.headers.Authorization = `Bearer ${token}`;
+              resolve(api(originalRequest));
+            },
+            reject,
           });
         });
       }
@@ -43,11 +46,13 @@ api.interceptors.response.use(
         const { data } = await axios.post(`${API_BASE_URL}/auth/refresh`, {}, { withCredentials: true });
         const newToken = data.data.accessToken;
         useAuthStore.getState().setAccessToken(newToken);
-        refreshQueue.forEach((cb) => cb(newToken));
+        refreshQueue.forEach((cb) => cb.resolve(newToken));
         refreshQueue = [];
         originalRequest.headers.Authorization = `Bearer ${newToken}`;
         return api(originalRequest);
-      } catch {
+      } catch (refreshError) {
+        refreshQueue.forEach((cb) => cb.reject(refreshError));
+        refreshQueue = [];
         useAuthStore.getState().logout();
         window.location.href = '/login';
         return Promise.reject(error);
