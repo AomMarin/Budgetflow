@@ -47,11 +47,11 @@ Render build command (`npm ci && npm run build && npm run db:migrate:prod`) ร�
 ## ที่ยังค้างอยู่
 
 - [ ] เปลี่ยนรหัส Neon (หลุดใน chat ระหว่าง debug) แล้วอัปเดต `DATABASE_URL` ใน Render
-- [ ] แก้ `CORS_ORIGIN` ใน Render ให้ตรงกับ Vercel production domain จริง (ตอนนี้ยังเป็น placeholder `https://placeholder.vercel.app` ใน `render.yaml`)
-- [ ] เปลี่ยน demo account เป็น email/name ที่เหมาะสมกว่า (เริ่มทำแล้วบางส่วน — ดู commit `2d3dfef`)
+- [x] ~~แก้ `CORS_ORIGIN` ใน Render ให้ตรงกับ Vercel production domain จริง~~ — ตรวจซ้ำ 2026-08-04 ด้วย curl preflight ตรงไป production พบว่าจริงๆ ถูกแก้ไปแล้ว (`Access-Control-Allow-Origin: https://budgetflow-kohl.vercel.app` ไม่ใช่ placeholder) มีคนไปแก้ตรงใน Render dashboard โดยไม่ได้ sync กลับมาที่ `render.yaml`/todo นี้ — เหลือแค่แก้ `render.yaml` ให้ตรงกับของจริงเพื่อไม่ให้ blueprint sync ครั้งหน้าทับด้วยค่า placeholder เก่า
+- [ ] เปลี่ยน demo account เป็น email/name ที่เหมาะสมกว่า (เริ่มทำแล้วบางส่วน — ดู commit `2d3dfef`) — และหน้า `LoginPage.tsx` ยังโชว์ hint `Demo: demo@budgetflow.app / Password123!` ค้างอยู่ ซึ่งใช้ login ไม่ได้แล้วบน production ตั้งแต่ reseed เป็น `admin@budgetflow.app` (ยืนยันแล้วว่า login ด้วย demo@ ได้ `"Invalid credentials"`)
 - [ ] node-cron ไม่ทำงานจริงบน Render free tier (spin down 15 นาที) — พึ่ง GitHub Actions แทน
 - [ ] `uploads/` เป็น ephemeral ไฟล์หายทุก deploy
-- [ ] รัน `npm run db:seed` บน production (Neon) เพื่อ apply commit `9e145b9` จริง — แก้โค้ดแล้วแต่ data บน production ยังไม่ถูกแก้ (admin user ยัง `accounts: []` ตอนเขียนบันทึกนี้)
+- [x] ~~รัน `npm run db:seed` บน production (Neon) เพื่อ apply commit `9e145b9` จริง~~ — รันแล้ว 2026-08-04 ยืนยันผ่านทั้ง `GET /accounts` (curl) และ UI จริง (login เป็น admin เห็น Total Balance ฿30,000, Budget Buckets ครบ) — `setup-balance` 404 หายแล้ว
 
 ---
 
