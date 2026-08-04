@@ -3,6 +3,7 @@ import { Upload, FileText, CheckCircle, XCircle, Clock, Plus, Trash2, Download, 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { api } from '@/services/api';
+import { useAuthStore } from '@/stores/auth.store';
 import { useBudgets } from '@/hooks/useBudgets';
 import { ImportFile, ImportRule } from '@/types';
 import { formatDate, formatDateTime } from '@/utils/format';
@@ -52,6 +53,7 @@ export function ImportsPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [accountId, setAccountId] = useState('');
   const qc = useQueryClient();
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   const { data: accounts = [] } = useAccountsQuery<Account[]>({
     queryKey: ['accounts'],
@@ -62,6 +64,7 @@ export function ImportsPage() {
     queryKey: ['imports'],
     queryFn: async () => (await api.get('/imports')).data.data,
     refetchInterval: 5000,
+    enabled: isAuthenticated,
   });
 
   const { data: rulesData } = useQuery<{ rules: ImportRule[] }>({

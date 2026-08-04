@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
+import { useAuthStore } from '../stores/auth.store';
 import { Notification } from '../types';
 
 export const NOTIFICATIONS_KEY = ['notifications'];
@@ -17,6 +18,8 @@ export function useNotifications(enabled: boolean) {
 }
 
 export function useUnreadCount() {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+
   return useQuery({
     queryKey: NOTIFICATIONS_UNREAD_KEY,
     queryFn: async (): Promise<number> => {
@@ -24,6 +27,7 @@ export function useUnreadCount() {
       return res.data.data.count;
     },
     refetchInterval: 30_000,
+    enabled: isAuthenticated,
   });
 }
 
