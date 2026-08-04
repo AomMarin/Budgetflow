@@ -171,7 +171,12 @@ Auth routes (`/login`, `/register`) are guest-only; all others require auth via 
 - ตัดสินใจแล้วว่าทำแบบ **read-only sharing** ไม่ใช่ pooled/shared budget ที่แก้ไขร่วมกันได้ — เพื่อเลี่ยง concurrent-write race condition และไม่ต้องแตะ zero-based invariant เดิม (ยังคิดจาก `userId` เดียวเหมือนเดิมทุกที่)
 - **Schema**: `Household` (ownerId), `HouseholdMember` (userId unique — 1 คนอยู่ได้ 1 household), `HouseholdInvite` (code เชิญ หมดอายุ 7 วัน, ไม่มี email infra เลยใช้ shareable code แทน)
 - **Backend** `src/features/households/`: create/invite/join(code)/removeMember/leave/deleteHousehold/getOverview — `getOverview` ไม่แตะ repository เดิมเลย แค่เรียก `DashboardService.getSummary(userId)` ซ้ำต่อสมาชิกแต่ละคนแล้วรวมผล (เขียนใหม่ทั้งหมด ไม่กระทบ Account/Budget/Transaction เดิม)
-- **Frontend** หน้าใหม่ `src/features/household/HouseholdPage.tsx` (ย้ายออกจาก Settings แล้ว) + เมนู "Family Budget" ใน `Sidebar.tsx` (ยังไม่ใส่ใน BottomNav เพราะเต็ม 5 ปุ่มแล้ว เหมือน Reports/Import/Admin)
+- **Frontend** หน้าใหม่ `src/features/household/HouseholdPage.tsx` (ย้ายออกจาก Settings แล้ว) + เมนู "Family Budget" ใน `Sidebar.tsx` (ยังไม่ใส่ใน BottomNav เพราะเต็ม 5 ปุ่มแล้ว เหมือน Reports/Import/Admin — เข้าถึงได้ทางอื่นบนมือถือแล้ว ดู #9)
+
+#### 9. Mobile: keep-alive heartbeat + overflow menu (logout, Reports/Import/Family Budget/Admin)
+- **`hooks/useKeepAlive.ts`** (ไฟล์ใหม่): ping `warmUpBackend()` ทุก 10 นาทีระหว่าง session ที่ login อยู่ (`enabled` ผูกกับ `isAuthenticated`) เพื่อกัน Render free tier spin down ที่ 15 นาที — ผูกกับ `visibilitychange`: หยุด ping ทันทีเมื่อแท็บ hidden (`clearInterval`), ping ทันที 1 ครั้ง + เริ่ม interval ใหม่เมื่อกลับมา visible (สำคัญบนมือถือเพราะ browser throttle background timer เองอยู่แล้ว) เรียกที่เดียวใน `AppLayout.tsx` ไม่ผ่าน TanStack Query
+- **ปัญหาที่เจอ**: `Sidebar.tsx` เป็นที่เดียวในระบบที่มีปุ่ม logout แต่ตัว `<aside>` เอง `hidden md:flex` — มือถือไม่มีทาง logout เลย, และ Reports/Import/Family Budget/Admin ก็เข้าไม่ถึงเช่นกันเพราะ `BottomNav` มีแค่ 5 ปุ่ม
+- **Frontend** `components/layout/UserMenu.tsx` (ไฟล์ใหม่): ปุ่ม avatar `md:hidden` ใน `Header.tsx` เปิด dropdown ก็อป pattern เดียวกับ `NotificationBell.tsx` (state + click-outside ผ่าน ref) แบ่ง 2 ส่วนคั่นด้วย divider — ส่วนบน: nav link ไป Reports/Import/Family Budget (+ Admin เฉพาะ `role === 'ADMIN'`, pattern เดียวกับ `RequireAdmin` ใน `App.tsx`) ปิด dropdown อัตโนมัติหลังกด (`onClick` เซ็ต `isOpen(false)` บน `NavLink` เอง); ส่วนล่าง: ชื่อ/อีเมล + ปุ่มออกจากระบบ (ของเดิมที่มีอยู่แล้ว) — icon ใช้ตัวเดียวกับ `Sidebar.tsx` (`BarChart3`, `Upload`, `Users`, `ShieldCheck`)
 
 ### Bug ที่เจอและแก้ระหว่างทาง (ไม่เกี่ยวกับ feature ใหม่)
 - **Rate limit ต่ำไป**: `RATE_LIMIT_MAX` เดิม 100 req/15min ต่อ IP ชนกับ dashboard/notification polling จริง ปรับเป็น 1000 ใน `.env`/`.env.example`
@@ -179,7 +184,6 @@ Auth routes (`/login`, `/register`) are guest-only; all others require auth via 
 
 ### สิ่งที่ยังไม่ได้ทำ / ปรับปรุงได้
 
-- BottomNav ไม่มีปุ่ม Reports, Import, Family Budget, Admin (ใส่ได้แค่ 5 ปุ่ม เลือกเฉพาะหน้าหลัก)
 - Transaction บนมือถือ ปุ่ม Delete ซ่อนไว้ (มีแค่ Edit) — กด Edit แล้วค่อยลบได้จาก form
 - Household ยัง read-only อย่างเดียว — ยังไม่มี shared/pooled budget ที่แก้ไขร่วมกันได้จริง (เคยประเมินไว้ว่าเสี่ยง race condition + ต้องแก้ invariant ทั้งระบบ ถ้าจะทำต้องคุยเรื่อง scope ใหม่)
 - Notification เป็น in-app เท่านั้น ยังไม่มี email/push จริง (ไม่มี SMTP/VAPID credentials)
