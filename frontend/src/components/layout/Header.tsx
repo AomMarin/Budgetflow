@@ -1,6 +1,7 @@
 import { Sun, Moon, Monitor, TrendingUp } from 'lucide-react';
 import { useThemeStore, applyTheme } from '@/stores/theme.store';
 import { NotificationBell } from './NotificationBell';
+import { UserMenu } from './UserMenu';
 import { cn } from '@/utils/cn';
 
 export function Header({ title }: { title: string }) {
@@ -43,6 +44,8 @@ export function Header({ title }: { title: string }) {
             </button>
           ))}
         </div>
+
+        <UserMenu />
       </div>
     </header>
   );

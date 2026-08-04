@@ -2,6 +2,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { BottomNav } from './BottomNav';
+import { useKeepAlive } from '@/hooks/useKeepAlive';
 
 const pageTitles: Record<string, string> = {
   '/dashboard': 'Dashboard',
@@ -18,6 +19,8 @@ const pageTitles: Record<string, string> = {
 export function AppLayout() {
   const { pathname } = useLocation();
   const title = pageTitles[pathname] ?? 'BudgetFlow';
+
+  useKeepAlive();
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-950">
