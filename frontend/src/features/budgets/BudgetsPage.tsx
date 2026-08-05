@@ -30,7 +30,10 @@ export function BudgetsPage() {
   const totalAllocated = budgets.reduce((s, b) => s + Number(b.allocatedAmount), 0);
   const totalSpent = budgets.reduce((s, b) => s + Number(b.spentAmount), 0);
   const totalRemaining = totalAllocated - totalSpent;
-  const totalUnallocated = totalBalance - totalAllocated;
+  // Compare against totalRemaining, not totalAllocated: spent money already left
+  // the account balance, but allocatedAmount never shrinks when spent, so
+  // subtracting totalAllocated here would double-count it. Do not revert.
+  const totalUnallocated = totalBalance - totalRemaining;
   const overallPercent = totalAllocated > 0 ? Math.round((totalSpent / totalAllocated) * 100) : 0;
 
   return (

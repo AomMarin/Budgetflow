@@ -80,16 +80,20 @@ router.post(
         const account = await tx.account.findFirst({ where: { userId, isDefault: true } });
         if (!account) throw Object.assign(new Error('Default account not found'), { status: 404 });
 
-        const [totalAllocated, balanceAgg] = await Promise.all([
-          budgetRepo.getTotalAllocated(userId, tx),
+        const [{ totalAllocated, totalSpent }, balanceAgg] = await Promise.all([
+          budgetRepo.getAllocationTotals(userId, tx),
           tx.account.aggregate({ where: { userId }, _sum: { balance: true } }),
         ]);
         const currentTotalBalance = Number(balanceAgg._sum.balance ?? 0);
         const newTotalBalance = currentTotalBalance - Number(account.balance) + req.body.balance;
-        if (newTotalBalance < totalAllocated) {
+        // Compare against totalRemaining (unspent earmarks), not totalAllocated —
+        // spent money already left the balance via its expense transaction, so
+        // totalAllocated alone double-counts it. Same fix as BudgetService.
+        const totalRemaining = totalAllocated - totalSpent;
+        if (newTotalBalance < totalRemaining) {
           throw Object.assign(
             new Error(
-              `ยอดเงินใหม่ทำให้ยอดรวมในบัญชีน้อยกว่ายอดที่จัดสรรไว้แล้ว (จัดสรรแล้ว ${totalAllocated.toFixed(2)} บาท) กรุณาลดยอดจัดสรรงบก่อน`,
+              `ยอดเงินใหม่ทำให้ยอดรวมในบัญชีน้อยกว่ายอดที่จัดสรรไว้แล้ว (จัดสรรแล้ว ${totalRemaining.toFixed(2)} บาท) กรุณาลดยอดจัดสรรงบก่อน`,
             ),
             { status: 400 },
           );

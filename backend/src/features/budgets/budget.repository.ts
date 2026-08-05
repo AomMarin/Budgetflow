@@ -64,11 +64,17 @@ export class BudgetRepository {
     await prisma.budget.update({ where: { id }, data: { lastAlertedLevel: level } });
   }
 
-  async getTotalAllocated(userId: string, db: Db = prisma): Promise<number> {
+  // Single aggregate for both sums so callers never need a second round trip
+  // (and can't accidentally read allocatedAmount without spentAmount, see
+  // BudgetService's use of totalRemaining).
+  async getAllocationTotals(userId: string, db: Db = prisma): Promise<{ totalAllocated: number; totalSpent: number }> {
     const result = await db.budget.aggregate({
       where: { userId, isArchived: false },
-      _sum: { allocatedAmount: true },
+      _sum: { allocatedAmount: true, spentAmount: true },
     });
-    return Number(result._sum.allocatedAmount ?? 0);
+    return {
+      totalAllocated: Number(result._sum.allocatedAmount ?? 0),
+      totalSpent: Number(result._sum.spentAmount ?? 0),
+    };
   }
 }

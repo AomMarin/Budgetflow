@@ -56,9 +56,14 @@ export function BudgetForm({ open, onClose, budget }: Props) {
 
   const totalBalance = accounts.reduce((s, a) => s + Number(a.balance), 0);
   const totalAllocated = budgets.reduce((s, b) => s + Number(b.allocatedAmount), 0);
+  const totalSpent = budgets.reduce((s, b) => s + Number(b.spentAmount), 0);
+  // Use totalRemaining (unspent earmarks), not totalAllocated: spent money
+  // already left the account balance, so allocatedAmount alone double-counts
+  // it against balance. Do not revert to totalAllocated.
+  const totalRemaining = totalAllocated - totalSpent;
   // When editing, exclude the current budget's allocation from the "already allocated" sum
   const currentAllocation = isEditing ? Number(budget.allocatedAmount) : 0;
-  const availableToAllocate = totalBalance - totalAllocated + currentAllocation;
+  const availableToAllocate = totalBalance - totalRemaining + currentAllocation;
 
   const enteredAmount = parseFloat(allocatedAmount) || 0;
   const exceedsAvailable = enteredAmount > availableToAllocate && totalBalance > 0;

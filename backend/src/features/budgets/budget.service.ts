@@ -47,11 +47,18 @@ export class BudgetService {
     const budget = await prisma.$transaction(async (tx) => {
       await this.lockUser(tx, userId);
 
-      const [totalAllocated, totalBalance] = await Promise.all([
-        this.repo.getTotalAllocated(userId, tx),
+      const [{ totalAllocated, totalSpent }, totalBalance] = await Promise.all([
+        this.repo.getAllocationTotals(userId, tx),
         this.getTotalBalance(userId, tx),
       ]);
-      const available = totalBalance - totalAllocated;
+      // Spent money already left the account balance (see transaction.service.ts
+      // EXPENSE handling), but allocatedAmount never shrinks when spent — it's a
+      // permanent earmark. Subtracting totalAllocated here would double-count
+      // that spent money (once via balance, once via allocatedAmount), so the
+      // check must compare against totalRemaining (still-earmarked, unspent),
+      // not totalAllocated. Do not change this back to totalAllocated.
+      const totalRemaining = totalAllocated - totalSpent;
+      const available = totalBalance - totalRemaining;
       if (dto.allocatedAmount > available) {
         throw Object.assign(
           new Error(`จัดสรรเกินยอดคงเหลือ จัดสรรได้อีก ${available.toFixed(2)} บาท`),
@@ -71,11 +78,15 @@ export class BudgetService {
       if (!existing) throw Object.assign(new Error('Budget not found'), { status: 404 });
 
       if (dto.allocatedAmount !== undefined) {
-        const [totalAllocated, totalBalance] = await Promise.all([
-          this.repo.getTotalAllocated(userId, tx),
+        const [{ totalAllocated, totalSpent }, totalBalance] = await Promise.all([
+          this.repo.getAllocationTotals(userId, tx),
           this.getTotalBalance(userId, tx),
         ]);
-        const available = totalBalance - (totalAllocated - Number(existing.allocatedAmount));
+        // Same fix as create(): compare against totalRemaining (unspent
+        // earmarks), not totalAllocated, or spent money gets double-counted
+        // against the balance. See create() for the full explanation.
+        const totalRemaining = totalAllocated - totalSpent;
+        const available = totalBalance - (totalRemaining - Number(existing.allocatedAmount));
         if (dto.allocatedAmount > available) {
           throw Object.assign(
             new Error(`จัดสรรเกินยอดคงเหลือ จัดสรรได้สูงสุด ${available.toFixed(2)} บาท`),
