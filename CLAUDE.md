@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BudgetFlow — zero-based budgeting app ("every baht has a purpose"). Full-stack TypeScript monorepo with separate `backend/` and `frontend/` workspaces.
 
-**Demo account:** demo@budgetflow.app / Password123!
+**Demo account:** admin@budgetflow.app / Password123!
 
 ---
 
