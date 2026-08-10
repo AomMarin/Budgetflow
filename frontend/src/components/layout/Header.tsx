@@ -1,10 +1,18 @@
 import { Sun, Moon, Monitor, TrendingUp } from 'lucide-react';
 import { useThemeStore, applyTheme } from '@/stores/theme.store';
 import { NotificationBell } from './NotificationBell';
+import { ServerStatusButton } from './ServerStatusButton';
 import { UserMenu } from './UserMenu';
 import { cn } from '@/utils/cn';
+import { ServerStatus } from '@/hooks/useKeepAlive';
 
-export function Header({ title }: { title: string }) {
+interface HeaderProps {
+  title: string;
+  serverStatus: ServerStatus;
+  onRefreshServer: () => Promise<boolean>;
+}
+
+export function Header({ title, serverStatus, onRefreshServer }: HeaderProps) {
   const { theme, setTheme } = useThemeStore();
 
   const themeOptions = [
@@ -26,6 +34,7 @@ export function Header({ title }: { title: string }) {
 
       <div className="flex items-center gap-2">
         <NotificationBell />
+        <ServerStatusButton status={serverStatus} onRefresh={onRefreshServer} />
 
         {/* Theme switcher */}
         <div className="flex items-center bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5 gap-0.5">
