@@ -20,6 +20,8 @@ npm run build        # Compile TypeScript to dist/
 npm run lint         # ESLint src/**/*.ts
 npm run lint:fix     # ESLint with auto-fix
 npm run format       # Prettier
+npm run test         # Run unit tests once (vitest, needs local budgetflow_test DB — see Testing below)
+npm run test:watch   # Same, watch mode
 
 # Database
 npm run db:migrate   # Run pending Prisma migrations (dev)
@@ -35,6 +37,8 @@ npm run dev          # Vite dev server on port 5173 (proxies /api → 3001)
 npm run build        # tsc + vite build
 npm run lint         # ESLint src/**/*.{ts,tsx}
 npm run format       # Prettier
+npm run test         # Run unit tests once (vitest — pure functions only, no DB)
+npm run test:watch   # Same, watch mode
 ```
 
 ### Required `.env` (backend)
@@ -44,6 +48,46 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/budgetflow
 JWT_ACCESS_SECRET=<secret>
 JWT_REFRESH_SECRET=<secret>
 ```
+
+### Testing — one-time setup
+
+Backend unit tests (`backend/src/**/__tests__/*.test.ts`) exercise real services against a **real, separate** Postgres database named `budgetflow_test` — never the dev/prod database. `backend/src/test/setup.ts` throws immediately if `DATABASE_URL` doesn't contain `_test`, so a misconfigured `.env.test` fails loudly instead of silently touching real data. Frontend unit tests (`frontend/src/**/__tests__/*.test.ts`) only cover pure functions (e.g. `utils/allocation.ts`) and need no database.
+
+**1. Get a local Postgres with a `budgetflow_test` database.** If you don't already run Postgres locally, the fastest path is a disposable Docker container:
+
+```bash
+docker run -d --name budgetflow-test-pg \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=budgetflow_test \
+  -p 5432:5432 \
+  postgres:16
+```
+
+(Reuse later with `docker start budgetflow-test-pg` / stop with `docker stop budgetflow-test-pg`. If you already run Postgres on 5432 some other way, just create a `budgetflow_test` database in it instead — no container needed.)
+
+**2. Create `backend/.env.test`** by copying `backend/.env.test.example` (gitignored, same as `.env` — never committed):
+
+```bash
+cp backend/.env.test.example backend/.env.test
+```
+
+Adjust `DATABASE_URL` only if your Postgres credentials/port differ from the Docker command above.
+
+**3. Migrate the test database:**
+
+```bash
+cd backend && npm run test:db:migrate   # prisma migrate deploy, loaded from .env.test
+```
+
+**4. Run tests:**
+
+```bash
+cd backend && npm run test    # or test:watch
+cd frontend && npm run test   # or test:watch
+```
+
+Backend tests create/delete their own `test-<uuid>@budgetflow.test` users per test (see `src/test/helpers.ts`) and clean up in `afterEach`, so the suite is safe to re-run without resetting the database.
 
 API docs available at `http://localhost:3001/api/v1/docs` (Swagger UI) when running dev.
 

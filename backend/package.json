@@ -15,7 +15,10 @@
     "job:daily": "tsx src/jobs/run-daily.ts",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
-    "format": "prettier --write \"src/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\"",
+    "test:db:migrate": "dotenv -e .env.test -- npx prisma migrate deploy",
+    "test": "dotenv -e .env.test -- vitest run",
+    "test:watch": "dotenv -e .env.test -- vitest"
   },
   "dependencies": {
     "@prisma/client": "^5.10.0",
@@ -54,10 +57,12 @@
     "@types/uuid": "^9.0.8",
     "@typescript-eslint/eslint-plugin": "^7.3.1",
     "@typescript-eslint/parser": "^7.3.1",
+    "dotenv-cli": "^11.0.0",
     "eslint": "^8.57.0",
     "prettier": "^3.2.5",
     "prisma": "^5.10.0",
     "tsx": "^4.7.1",
-    "typescript": "^5.4.2"
+    "typescript": "^5.4.2",
+    "vitest": "^4.1.10"
   }
 }

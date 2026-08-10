@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { usePool, usePoolCreateBudget, usePoolUpdateBudget } from '@/hooks/usePoolBudget';
 import { formatCurrency } from '@/utils/format';
+import { calculateAllocationTotals } from '@/utils/allocation';
 
 const PRESET_ICONS = [
   '💰','🍔','🚗','🛍️','🎬','🏠','💊','✈️',
@@ -40,14 +41,8 @@ export function PoolBudgetForm({ open, onClose, budget }: Props) {
 
   const { data: pool } = usePool(open);
   const totalBalance = pool?.balance ?? 0;
-  const totalAllocated = (pool?.budgets ?? []).reduce((s, b) => s + Number(b.allocatedAmount), 0);
-  const totalSpent = (pool?.budgets ?? []).reduce((s, b) => s + Number(b.spentAmount), 0);
-  // Use totalRemaining (unspent earmarks), not totalAllocated: spent money
-  // already left the pool balance, so allocatedAmount alone double-counts it
-  // against balance. Do not revert to totalAllocated.
-  const totalRemaining = totalAllocated - totalSpent;
   const currentAllocation = isEditing ? Number(budget.allocatedAmount) : 0;
-  const availableToAllocate = totalBalance - totalRemaining + currentAllocation;
+  const { availableToAllocate } = calculateAllocationTotals(pool?.budgets ?? [], totalBalance, currentAllocation);
 
   const enteredAmount = parseFloat(allocatedAmount) || 0;
   const exceedsAvailable = enteredAmount > availableToAllocate && totalBalance > 0;

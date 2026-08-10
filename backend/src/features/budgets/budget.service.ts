@@ -47,7 +47,7 @@ export class BudgetService {
     const budget = await prisma.$transaction(async (tx) => {
       await this.lockUser(tx, userId);
 
-      const [{ totalAllocated, totalSpent }, totalBalance] = await Promise.all([
+      const [{ totalRemaining }, totalBalance] = await Promise.all([
         this.repo.getAllocationTotals(userId, tx),
         this.getTotalBalance(userId, tx),
       ]);
@@ -57,7 +57,6 @@ export class BudgetService {
       // that spent money (once via balance, once via allocatedAmount), so the
       // check must compare against totalRemaining (still-earmarked, unspent),
       // not totalAllocated. Do not change this back to totalAllocated.
-      const totalRemaining = totalAllocated - totalSpent;
       const available = totalBalance - totalRemaining;
       if (dto.allocatedAmount > available) {
         throw Object.assign(
@@ -76,17 +75,34 @@ export class BudgetService {
 
       const existing = await tx.budget.findFirst({ where: { id, userId } });
       if (!existing) throw Object.assign(new Error('Budget not found'), { status: 404 });
+      if (existing.isArchived) {
+        throw Object.assign(new Error('ไม่สามารถแก้ไขงบที่เก็บถาวรแล้ว'), { status: 400 });
+      }
 
       if (dto.allocatedAmount !== undefined) {
-        const [{ totalAllocated, totalSpent }, totalBalance] = await Promise.all([
+        const existingSpent = Number(existing.spentAmount);
+        if (dto.allocatedAmount < existingSpent) {
+          throw Object.assign(
+            new Error(
+              `ลดยอดจัดสรรต่ำกว่ายอดที่ใช้ไปแล้วไม่ได้ (ใช้ไปแล้ว ${existingSpent.toFixed(2)} บาท)`,
+            ),
+            { status: 400 },
+          );
+        }
+
+        const [{ totalRemaining }, totalBalance] = await Promise.all([
           this.repo.getAllocationTotals(userId, tx),
           this.getTotalBalance(userId, tx),
         ]);
         // Same fix as create(): compare against totalRemaining (unspent
         // earmarks), not totalAllocated, or spent money gets double-counted
         // against the balance. See create() for the full explanation.
-        const totalRemaining = totalAllocated - totalSpent;
-        const available = totalBalance - (totalRemaining - Number(existing.allocatedAmount));
+        // existing's own floored remaining is backed out and replaced by the
+        // proposed dto.allocatedAmount below — safe because the guard above
+        // guarantees existing.allocatedAmount >= existingSpent, so the floor
+        // never actually clips it (floor(x) === x for x >= 0).
+        const existingRemaining = Number(existing.allocatedAmount) - existingSpent;
+        const available = totalBalance - (totalRemaining - existingRemaining);
         if (dto.allocatedAmount > available) {
           throw Object.assign(
             new Error(`จัดสรรเกินยอดคงเหลือ จัดสรรได้สูงสุด ${available.toFixed(2)} บาท`),

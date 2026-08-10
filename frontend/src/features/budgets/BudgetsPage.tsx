@@ -5,6 +5,7 @@ import { useBudgets } from '@/hooks/useBudgets';
 import { Budget, Account } from '@/types';
 import { api } from '@/services/api';
 import { formatCurrency } from '@/utils/format';
+import { calculateAllocationTotals } from '@/utils/allocation';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -27,13 +28,12 @@ export function BudgetsPage() {
   const [allocateOpen, setAllocateOpen] = useState(false);
 
   const totalBalance = accounts.reduce((s, a) => s + Number(a.balance), 0);
-  const totalAllocated = budgets.reduce((s, b) => s + Number(b.allocatedAmount), 0);
-  const totalSpent = budgets.reduce((s, b) => s + Number(b.spentAmount), 0);
-  const totalRemaining = totalAllocated - totalSpent;
-  // Compare against totalRemaining, not totalAllocated: spent money already left
-  // the account balance, but allocatedAmount never shrinks when spent, so
-  // subtracting totalAllocated here would double-count it. Do not revert.
-  const totalUnallocated = totalBalance - totalRemaining;
+  const {
+    totalAllocated,
+    totalSpent,
+    totalRemaining,
+    availableToAllocate: totalUnallocated,
+  } = calculateAllocationTotals(budgets, totalBalance);
   const overallPercent = totalAllocated > 0 ? Math.round((totalSpent / totalAllocated) * 100) : 0;
 
   return (

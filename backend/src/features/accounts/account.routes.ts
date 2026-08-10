@@ -6,9 +6,9 @@ import { AuthenticatedRequest } from '../../types';
 import { Request, Response, NextFunction } from 'express';
 import { body } from 'express-validator';
 import { validate } from '../../middleware/validation.middleware';
-import { BudgetRepository } from '../budgets/budget.repository';
+import { AccountService } from './account.service';
 
-const budgetRepo = new BudgetRepository();
+const accountService = new AccountService();
 
 const router = Router();
 
@@ -70,38 +70,7 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = (req as AuthenticatedRequest).user.id;
-
-      const updated = await prisma.$transaction(async (tx) => {
-        // Same per-user advisory lock used by BudgetService create/update:
-        // FOR UPDATE on existing rows can't guard an aggregate check against
-        // a concurrent budget create (phantom row, invisible until commit).
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId})::bigint)`;
-
-        const account = await tx.account.findFirst({ where: { userId, isDefault: true } });
-        if (!account) throw Object.assign(new Error('Default account not found'), { status: 404 });
-
-        const [{ totalAllocated, totalSpent }, balanceAgg] = await Promise.all([
-          budgetRepo.getAllocationTotals(userId, tx),
-          tx.account.aggregate({ where: { userId }, _sum: { balance: true } }),
-        ]);
-        const currentTotalBalance = Number(balanceAgg._sum.balance ?? 0);
-        const newTotalBalance = currentTotalBalance - Number(account.balance) + req.body.balance;
-        // Compare against totalRemaining (unspent earmarks), not totalAllocated —
-        // spent money already left the balance via its expense transaction, so
-        // totalAllocated alone double-counts it. Same fix as BudgetService.
-        const totalRemaining = totalAllocated - totalSpent;
-        if (newTotalBalance < totalRemaining) {
-          throw Object.assign(
-            new Error(
-              `ยอดเงินใหม่ทำให้ยอดรวมในบัญชีน้อยกว่ายอดที่จัดสรรไว้แล้ว (จัดสรรแล้ว ${totalRemaining.toFixed(2)} บาท) กรุณาลดยอดจัดสรรงบก่อน`,
-            ),
-            { status: 400 },
-          );
-        }
-
-        return tx.account.update({ where: { id: account.id }, data: { balance: req.body.balance } });
-      });
-
+      const updated = await accountService.setupBalance(userId, req.body.balance);
       sendSuccess(res, { account: updated }, 'Starting balance updated');
     } catch (err) {
       next(err);

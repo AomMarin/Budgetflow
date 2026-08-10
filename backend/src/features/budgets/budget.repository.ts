@@ -64,17 +64,29 @@ export class BudgetRepository {
     await prisma.budget.update({ where: { id }, data: { lastAlertedLevel: level } });
   }
 
-  // Single aggregate for both sums so callers never need a second round trip
-  // (and can't accidentally read allocatedAmount without spentAmount, see
-  // BudgetService's use of totalRemaining).
-  async getAllocationTotals(userId: string, db: Db = prisma): Promise<{ totalAllocated: number; totalSpent: number }> {
-    const result = await db.budget.aggregate({
+  // totalRemaining is a floored per-budget sum (not totalAllocated - totalSpent):
+  // if a budget's allocatedAmount is ever below its spentAmount (legacy data,
+  // or a race), that single budget going negative must not inflate the
+  // allocation headroom available to every other budget. See BudgetService.
+  async getAllocationTotals(
+    userId: string,
+    db: Db = prisma,
+  ): Promise<{ totalAllocated: number; totalSpent: number; totalRemaining: number }> {
+    const budgets = await db.budget.findMany({
       where: { userId, isArchived: false },
-      _sum: { allocatedAmount: true, spentAmount: true },
+      select: { allocatedAmount: true, spentAmount: true },
     });
-    return {
-      totalAllocated: Number(result._sum.allocatedAmount ?? 0),
-      totalSpent: Number(result._sum.spentAmount ?? 0),
-    };
+
+    let totalAllocated = 0;
+    let totalSpent = 0;
+    let totalRemaining = 0;
+    for (const b of budgets) {
+      const allocated = Number(b.allocatedAmount);
+      const spent = Number(b.spentAmount);
+      totalAllocated += allocated;
+      totalSpent += spent;
+      totalRemaining += Math.max(allocated - spent, 0);
+    }
+    return { totalAllocated, totalSpent, totalRemaining };
   }
 }
