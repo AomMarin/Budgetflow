@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BudgetFlow — zero-based budgeting app ("every baht has a purpose"). Full-stack TypeScript monorepo with separate `backend/` and `frontend/` workspaces.
 
-**Demo account:** admin@budgetflow.app / Password123!
+**Demo account:** demo@budgetflow.app / Password123! (USER role, public — shown on the login page)
+
+`prisma/seed.ts` also creates a separate `admin@budgetflow.app` (ADMIN role) for private/real use. It is never shown in the UI and its password is not seeded — set `SEED_ADMIN_PASSWORD` before the first seed run in any shared environment, or change it via Settings after login. Re-seeding never touches an admin password that already exists.
 
 ---
 
@@ -225,6 +227,7 @@ Auth routes (`/login`, `/register`) are guest-only; all others require auth via 
 ### Bug ที่เจอและแก้ระหว่างทาง (ไม่เกี่ยวกับ feature ใหม่)
 - **Rate limit ต่ำไป**: `RATE_LIMIT_MAX` เดิม 100 req/15min ต่อ IP ชนกับ dashboard/notification polling จริง ปรับเป็น 1000 ใน `.env`/`.env.example`
 - **`reports.service.ts` raw SQL bug**: query เดิมใช้ `WHERE user_id = ...` แต่ column จริงคือ `"userId"` (Prisma ไม่ได้ map field เป็น snake_case) ทำให้ `/reports/monthly` และ `/reports/yearly` 500 error มาตั้งแต่ commit แรก (กราฟ daily spending กับ yearly overview เงียบๆ ไม่เคยขึ้นเลย) — แก้เป็น `WHERE "userId" = ...` แล้ว
+- **Public login page เคยชี้ไปหา account ที่มีสิทธิ์ ADMIN**: `LoginPage.tsx` เคยโชว์ hint credential ของ `admin@budgetflow.app` (ตอนแรกโชว์ผิดเป็น `demo@budgetflow.app` เลย login ไม่ได้ ซึ่งบังเอิญปลอดภัยกว่า — พอแก้ hint ให้ตรงกับ seed จริงตอนนั้นคือ admin@ กลับกลายเป็นเปิดให้ public login เข้าสิทธิ์ ADMIN ได้จริง) แก้โดยแยก seed เป็นสอง user: `admin@budgetflow.app` (ADMIN, private, ไม่โชว์ใน UI, password มาจาก `SEED_ADMIN_PASSWORD` ตั้งแค่ตอนสร้างครั้งแรก ไม่เขียนทับตอน re-seed) กับ `demo@budgetflow.app` (USER role, password คงที่ `Password123!` ตั้งใจ public, ค่า role/password ถูก enforce ทุกครั้งที่ seed รันเพื่อกัน legacy row หลุด role) — ดู `DEPLOYMENT.md` สำหรับคำสั่ง apply บน production
 
 ### สิ่งที่ยังไม่ได้ทำ / ปรับปรุงได้
 

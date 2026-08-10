@@ -173,3 +173,32 @@ Remove-Item Env:\DATABASE_URL
 **ไม่ต้อง clear browser localStorage**: `budgetflow-auth` เก็บแค่ `{ user, accessToken, isAuthenticated }` ไม่มี account/budget data ติดมา และ accounts/budgets ฝั่ง frontend ดึงสดผ่าน TanStack Query ทุกครั้งที่โหลดหน้า (ไม่ persist) ส่วน PWA service worker cache ใช้ `NetworkFirst` (ลองยิง network ก่อนเสมอ) เพราะงั้น refresh หน้าเปล่าธรรมดาก็เห็นผลลัพธ์ใหม่ทันที ไม่ต้อง logout/clear storage
 
 **ผลข้างเคียงที่ต้องรู้ก่อนรัน seed จริง**: `seed.ts` ไม่ได้แก้แค่ account — ยังมี budget upsert (`findFirst`-or-`create`, idempotent) และ import rule upsert (unique by keyword, idempotent) ถ้า admin user ปัจจุบันยังไม่มี budget เลย รัน seed จะสร้าง 7 budget ตัวอย่าง (Food & Dining ฿6,000 ฯลฯ) ติดมาด้วย ควรเช็ค `GET /budgets` ก่อนถ้าไม่อยากได้ข้อมูลตัวอย่างติดมา
+
+---
+
+## รอบ 2026-08-10 — Public login page เคยชี้ไปหา account สิทธิ์ ADMIN
+
+**อาการ**: `LoginPage.tsx` โชว์ hint credential ค้างมาตั้งแต่ก่อน commit `2d3dfef` reseed เป็น `demo@budgetflow.app` (login ไม่ได้จริง เพราะ user นั้นถูกเปลี่ยนเป็น `admin@budgetflow.app` ไปแล้ว) ระหว่างแก้ hint ให้ตรงกับ seed จริง (commit `c915a24`) พบว่าค่าที่ "ถูกต้อง" ตอนนั้นคือ `admin@budgetflow.app` — เท่ากับ commit นั้นทำให้หน้า login สาธารณะ (Vercel, auto-deploy on push) โชว์ credential ที่ login แล้วได้สิทธิ์ ADMIN จริง (`/admin/*` — list/create/update/delete user คนอื่นได้) **แย่กว่าก่อนแก้** (ก่อนหน้านั้น hint ผิดจน login ไม่ได้เลย ปลอดภัยโดยบังเอิญ)
+
+**Mitigation ทันที (ทำแล้วก่อนแก้โค้ด)**: เจ้าของ account เปลี่ยนรหัส `admin@budgetflow.app` เองผ่าน Settings → Change Password (`POST /auth/change-password`) — ตัดปัญหา credential ที่อาจหลุดไปแล้วจากตอน hint ผิด ก่อนจะแก้ seed/UI
+
+**Fix**: แยก `seed.ts` เป็นสอง user แทนที่จะมี user เดียวทำหน้าที่ทั้งสองอย่าง
+- `admin@budgetflow.app` (ADMIN) — private ใช้งานจริง ไม่โชว์ใน UI ไหนเลย password มาจาก `SEED_ADMIN_PASSWORD` (ตั้งใน `.env`) แต่ตั้งเฉพาะตอน `create` เท่านั้น — re-seed ไม่มีทางเขียนทับรหัสที่เปลี่ยนเองผ่าน Settings ไปแล้ว account lookup เปลี่ยนจาก upsert-by-fixed-id เป็น `findFirst({userId, isDefault}) ?? create()` (ของเดิมคือต้นตอบั๊ก `demo-account-id` ด้านบน — เปลี่ยนมาใช้ pattern เดียวกับ budget loop ที่ปลอดภัยกว่า)
+- `demo@budgetflow.app` (USER) — public ตั้งใจ โชว์ใน `LoginPage.tsx` จริง password คงที่ `Password123!` **enforce ทุกครั้งที่ seed รัน** (ต่างจาก admin) เพื่อกัน legacy row จากก่อน `2d3dfef` (ถ้ายังหลงเหลืออยู่บน production) มี role/password เพี้ยนไปจากที่ hint โฆษณาไว้ — มี account/budgets/transactions ตัวอย่างมาด้วย (คำนวณ balance/spentAmount มือ เพราะ seed insert ตรงผ่าน Prisma ไม่ผ่าน `TransactionService` เลยไม่มี side-effect อัตโนมัติ)
+
+**Test ใหม่**: `backend/src/middleware/__tests__/admin.middleware.test.ts` — unit test ตรง `requireAdmin` middleware (role USER ต้องโดน 403 บล็อก, role ADMIN ผ่าน) ไม่ต้องพึ่ง DB เลย
+
+**คำสั่ง apply บน production Neon**:
+
+```powershell
+cd backend
+$env:DATABASE_URL = "<production DATABASE_URL จาก Render dashboard>"
+$env:SEED_ADMIN_PASSWORD = "<รหัสใหม่ ถ้าต้องการ>"   # ไม่มีผลกับ admin ที่มีอยู่แล้ว ดูหมายเหตุ
+npm run db:seed
+Remove-Item Env:\DATABASE_URL
+Remove-Item Env:\SEED_ADMIN_PASSWORD
+```
+
+**หมายเหตุสำคัญ**: production มี `admin@budgetflow.app` อยู่แล้ว (เจ้าของเปลี่ยนรหัสเองแล้วผ่าน Settings ก่อนหน้านี้) → seed จะเข้า branch `update` เสมอ → **`SEED_ADMIN_PASSWORD` จะไม่มีผลอะไรกับ production เลย** (ตามที่ตั้งใจออกแบบ) สิ่งที่ seed รอบนี้จะทำจริงบน production คือสร้าง `demo@budgetflow.app` ใหม่พร้อมข้อมูลตัวอย่างเท่านั้น — ข้อมูลเดิมของ admin (account/budgets/transactions จริงทั้งหมด) ไม่ถูกแตะเลย ยืนยันแล้วด้วยการรัน seed ซ้ำ 2 รอบ local ว่า idempotent จริง (ไม่มี duplicate, balance ไม่ถูกบวกซ้ำ)
+
+**ต้องทำหลัง deploy**: อย่าลืมเปลี่ยน `LoginPage.tsx` hint (commit นี้) ต้องขึ้น production จริงด้วย ไม่ใช่แค่ backend seed — ทั้งสองฝั่งต้องขึ้นพร้อมกัน ไม่งั้นหน้า login จะยังโฆษณา credential เก่าอยู่
