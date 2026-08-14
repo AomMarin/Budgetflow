@@ -253,9 +253,14 @@ Auth routes (`/login`, `/register`) are guest-only; all others require auth via 
 - `recurring.service.ts`/`import.service.ts` ไม่ผ่าน `TransactionService` เลย (เขียน side-effect เอง) — **ไม่มี budget-insufficient check, ไม่ lock แถว** ต่างจาก `transaction.service.ts` create/update — เป็น gap เดิมตั้งแต่ก่อน Borrow feature ไม่ใช่ regression ใหม่ พึ่ง `notifyBudgetAlerts` แจ้งย้อนหลังแทน ยังไม่ตัดสินใจว่าจะให้ borrow เข้าถึง path นี้ด้วยไหม
 - `batchCreate()` (transaction batch entry) ไม่รองรับ borrow — เกิน budget ใน batch row ยัง throw `BUDGET_INSUFFICIENT` เดิม (ตัดสินใจแล้วว่าตัด scope ตรงๆ เพราะ batch ไม่มี per-row UI ให้เลือก borrow source)
 
-### Monthly Reset + Borrow-from-budget — แผนงาน Phase 3/4 (ยังไม่เริ่ม)
+### Monthly Reset + Borrow-from-budget — แผนงาน Phase 3/4 (ยังไม่เริ่มเขียนโค้ด)
 
-Design doc เต็มร่างไว้ตอน plan mode วันที่ 2026-08-14 (ไฟล์ plan อยู่นอก repo — เครื่อง user เท่านั้น) สรุป scope ที่ตกลงไว้เก็บไว้ที่นี่ให้ self-contained:
+Design doc ร่างแรกทำไว้ตอน plan mode วันที่ 2026-08-14 แล้วพบว่า **RESET/ROLLOVER เดิมละเมิด zero-based invariant** ระหว่าง session ตรวจทานถัดมา (2026-08-14 เช่นกัน) แก้ design ใหม่ทั้งคู่แล้ว — เวอร์ชันนี้คือ design ที่ยืนยันแล้ว, สรุปไว้ที่นี่ให้ self-contained ยังไม่ได้เขียนโค้ดจริงสักบรรทัด.
+
+**บั๊กที่เจอ (เหตุผลที่ design เดิมถูกทิ้ง)**: `spentAmount` หักออกจาก `Account.balance` ถาวรตอน expense เกิด เงินไม่มีทางย้อนคืนได้แค่ zero counter — ตัวอย่างตัวเลขจริงที่จับได้ (balance 8,400 / allocated 10,000 / spent 3,300, remaining เดิม 6,700 ≤ balance ✓):
+- RESET เดิม (spent=0, allocated ไม่แตะ) → remaining ใหม่ 10,000 > balance 8,400 ✗ เสกเงิน 1,600
+- ROLLOVER เดิม (allocated += remaining) → remaining ใหม่ 16,700 ✗ หนักกว่าอีก
+- SWEEP (spent=0, allocated=0) → remaining ใหม่ 0 ✓ ปลอดภัยอยู่แล้วอันเดียว ไม่ต้องแก้
 
 **Schema ที่จะเพิ่ม** (ยังไม่ implement):
 ```prisma
@@ -264,8 +269,9 @@ enum RolloverPolicy { RESET  ROLLOVER  SWEEP }
 model Budget {
   // ...fields เดิม...
   rolloverPolicy RolloverPolicy @default(RESET)
-  periodYear     Int   // เดือน/ปีที่ allocatedAmount/spentAmount ปัจจุบัน "แทน" อยู่
-  periodMonth    Int
+  monthlyTarget  Decimal? @db.Decimal(15, 2)  // ใช้เฉพาะ policy RESET, null = fallback ใช้ allocatedAmount ปัจจุบันตอน close
+  periodYear     Int   @default(dbgenerated("EXTRACT(YEAR FROM (now() AT TIME ZONE 'Asia/Bangkok'))::int"))   // เดือน/ปีที่ allocatedAmount/spentAmount ปัจจุบัน "แทน" อยู่
+  periodMonth    Int   @default(dbgenerated("EXTRACT(MONTH FROM (now() AT TIME ZONE 'Asia/Bangkok'))::int"))
 }
 
 model BudgetMonthlyHistory {
@@ -275,30 +281,62 @@ model BudgetMonthlyHistory {
   rolloverPolicy  RolloverPolicy
   closedAt        DateTime @default(now())
   @@unique([budgetId, year, month])
+  @@index([userId, year, month])   // query ประวัติตามช่วงเวลา
 }
 ```
+`periodYear`/`periodMonth` ใช้ `dbgenerated` ผูกกับ Asia/Bangkok ตรงๆ ใน DB (ไม่พึ่ง server process TZ ซึ่งเป็น UTC บน Render/Neon) — ข้อดีคือ call site เดิมทั้งหมดที่ `prisma.budget.create()` (`budget.repository.ts`, `seed.ts`, test helper, `pool.service.ts`) **ไม่ต้องแก้เลย** blast radius เท่ากับ 0 ตรง call site สร้าง budget.
 
-**หลักการสำคัญ**: `Budget.allocatedAmount`/`spentAmount` ยังอ่านตรงๆ เหมือนเดิมทุกจุด (`addStats()`, `getSummary()`, `checkAlerts()`, zero-based invariant) — ตีความใหม่เป็น "ยอดของ `periodYear`/`periodMonth` ปัจจุบันเท่านั้น" **ไม่ต้องแก้ reader เหล่านี้เลย** ตัด blast radius ใหญ่สุดของ feature นี้ลง — reports ที่ query จาก `Transaction.date` อยู่แล้ว (groupBy + date filter) ก็ปลอดภัยต่อมิติเวลาอยู่แล้วเช่นกัน ไม่ต้องแก้
+**หลักการสำคัญ (ไม่เปลี่ยน)**: `Budget.allocatedAmount`/`spentAmount` ยังอ่านตรงๆ เหมือนเดิมทุกจุด (`addStats()`, `getSummary()`, `checkAlerts()`, zero-based invariant) — ตีความใหม่เป็น "ยอดของ `periodYear`/`periodMonth` ปัจจุบันเท่านั้น" ไม่ต้องแก้ reader เหล่านี้เลย (ตรวจครบ 14 ไฟล์ที่อ่าน `spentAmount` แล้ว ทุกจุดเทียบกับ `allocatedAmount` ของ budget เดียวกัน ณ ปัจจุบันอยู่แล้ว ไม่มีจุดไหนสะสมข้ามเดือนเอง) — reports ที่ query จาก `Transaction.date` อยู่แล้วก็ปลอดภัยเช่นกัน ไม่ต้องแก้.
 
-**Reset logic ต่อ budget** (idempotent, เรียกซ้ำได้): ถ้า `periodYear/Month` ตรงกับปัจจุบันแล้ว → no-op — ไม่งั้น snapshot ลง `BudgetMonthlyHistory` แล้ว apply ตาม policy: `RESET` (spent=0, allocated **ไม่แตะ** เลย แม้เคยแก้กลางเดือนไว้ — ยืนยันแล้วกับ user), `ROLLOVER` (spent=0, allocated += remaining เดือนก่อน), `SWEEP` (spent=0, allocated=0)
+**สูตร reset ต่อ policy (แก้แล้ว, พิสูจน์ invariant ถือ)**:
+- **SWEEP**: `allocated=0, spent=0` → remaining=0 เสมอ ปลอดภัยไม่มีเงื่อนไข
+- **ROLLOVER**: `newAllocated = max(oldAllocated - oldSpent, 0)` (ไม่ใช่ `+=` อีกต่อไป), `newSpent = 0` — proof: `newRemaining = newAllocated = max(oldAllocated-oldSpent,0) = oldRemaining` (ค่าเดิมเป๊ะ, floor เดียวกับที่ `getAllocationTotals()` ใช้อยู่แล้ว) → remaining ไม่ขยับ invariant ถืออัตโนมัติ เป็น local operation ไม่ต้องเช็คข้าม budget อื่น. Clamp ที่ 0 กัน legacy data ที่ spent>allocated ทำให้ allocated ติดลบ
+- **RESET**: ต้องมี pool คำนวณข้าม budget เพราะไม่มีเงินใหม่เข้าระบบเอง — เงินไม่พอ **เติมบางส่วนเสมอ ไม่ error ไม่ข้าม** แล้วแจ้งเตือนผ่าน `NotificationType.BUDGET_ALERT` เดิม (ตัดสินใจแล้ว — ไม่เพิ่ม enum ใหม่เฟสนี้ ลดของที่ต้อง migrate, ข้อความแยกชัดพอในตัว):
+  ```
+  pool = balance - Σremaining (ทั้งระบบ, ใช้ getAllocationTotals() ตัวเดิม ไม่เขียน query ซ้ำ)
+  target        = monthlyTarget ?? oldAllocated
+  oldRemaining  = max(oldAllocated - oldSpent, 0)
+  topup         = min(max(target - oldRemaining, 0), pool)
+  newAllocated  = oldRemaining + topup
+  newSpent      = 0
+  ```
+  Proof: `Σremaining` เพิ่มสูงสุด `topup ≤ pool` ทุก step → invariant ถือหลังทุก step (assert เป็น step-by-step ใน test ได้เลย ไม่ใช่แค่ปลายทาง)
 
-**เกณฑ์ "เดือนปิดแล้ว"**: ผูกกับ `budget.periodYear/periodMonth` เท่านั้น **ไม่ใช้ wall-clock เทียบตรงๆ** — `(transaction.date's year,month) < (budget.periodYear, budget.periodMonth)` ถึงจะถือว่าปิด ใช้เกณฑ์เดียวกันไม่ว่า trigger จาก cron หรือ lazy eval (กัน edge case cron delay ที่ periodYear/Month ยังไม่ทันขยับ)
+**ลำดับประมวลผล — ต้องเป็น 2 pass ต่อ user ใน 1 transaction เดียว** (เปลี่ยนจาก design เดิมที่คิดว่าทำต่อ budget เดี่ยวได้ — RESET แย่ง pool ร่วมกันข้าม budget ทำแยกอิสระไม่ได้):
+1. Pass 1: budget ที่ close ด้วย SWEEP/ROLLOVER ทั้งหมดก่อน (ไม่กิน pool เลย — SWEEP ปล่อย pool เพิ่ม, ROLLOVER คงที่)
+2. Pass 2: budget RESET เรียงตาม `sortOrder` (deterministic, ลำดับเดียวกับ UI) recompute pool สดจาก `getAllocationTotals(tx)` ก่อนทุก budget (เห็นผล budget ก่อนหน้าใน pass เดียวกันเพราะอยู่ tx เดียวกัน) — first-come-first-served ตาม sortOrder ถ้า pool หมดกลางทาง budget หลังได้ topup=0
 
-**บล็อกทั้ง create/update/delete** ของ transaction ที่ date ตกอยู่ในเดือนปิดแล้ว (ทั้ง 2 ทิศทาง: แก้ของเก่าให้เข้าเดือนปิด และสร้างใหม่ย้อนหลังเข้าเดือนปิด) — ตัดสินใจแล้ว (ไม่ใช่แค่ block edit, สร้างย้อนหลังก็บล็อกเหมือนกันเพื่อกฎเป็นเส้นเดียว) error message ต้องบอกทางออกด้วย ไม่ใช่แค่บอกว่าทำไม่ได้:
+ต้อง `lockUser(tx, userId)` (advisory xact lock ตัวเดิมใน `budget.service.ts`) ครอบทั้ง 2 pass กัน cron กับ lazy hook แย่ง pool เดียวกันพร้อมกัน.
+
+**เปลี่ยนชื่อ/scope ฟังก์ชันหลัก**: `closeAndAdvancePeriodsForUser(userId)` (ทำทุก budget ที่ due ของ user เดียวพร้อมกัน) **ไม่ใช่** `closeAndAdvancePeriod(budgetId)` ต่อ budget เดี่ยวเหมือน draft แรก — idempotency ต่อ budget ยังอยู่ (ตัวที่ period ตรงปัจจุบันแล้ว skip ในลูป) แต่หน่วยอะตอมมิกคือทุก budget ของ user 1 คนที่ due พร้อมกัน. Cron loop เรียกฟังก์ชันนี้ต่อ user (ไม่ loop ต่อ budget ซ้อนอีกชั้นแบบ draft แรก), lazy hook ที่ `budget.service.ts getAll()`/`dashboard.service.ts getSummary()` เรียกจุดเดียวกันก่อนอ่าน budget — ใช้ทั้งคู่ไม่ใช่เลือกอย่างใดอย่างหนึ่ง (คง reasoning เดิม: cron อย่างเดียวเสี่ยง Render free tier sleep พลาดไปทั้งวัน).
+
+Archived budget: ข้ามอัตโนมัติฟรี ไม่ต้องเขียน logic เพิ่ม — ทั้ง cron loop และ lazy hook ดึง budget ผ่าน `repo.findAll(userId)` ตัวเดิมซึ่ง filter `isArchived: false` อยู่แล้ว (จุดเดียวกับ `checkAlerts`/`getAllocationTotals`).
+
+**เกณฑ์ "เดือนปิดแล้ว"**: ผูกกับ `budget.periodYear/periodMonth` เท่านั้น **ไม่ใช้ wall-clock เทียบตรงๆ** — `(transaction.date's year,month) < (budget.periodYear, budget.periodMonth)` ถึงจะถือว่าปิด ใช้เกณฑ์เดียวกันไม่ว่า trigger จาก cron หรือ lazy eval.
+
+**บล็อกทั้ง create/update/delete** ของ transaction ที่ date ตกอยู่ในเดือนปิดแล้ว (ทั้ง 2 ทิศทาง: แก้ของเก่าให้เข้าเดือนปิด และสร้างใหม่ย้อนหลังเข้าเดือนปิด) — ตัดสินใจแล้ว error message ต้องบอกทางออกด้วย:
 ```
 รายการนี้อยู่ในเดือนที่ปิดแล้ว แก้ไขไม่ได้
 หากต้องการปรับปรุง ให้บันทึกรายการใหม่ในเดือนปัจจุบันแทน
 ```
 
-**Job execution**: cron (ต่อจาก `daily.job.ts` เดิม, เพิ่ม loop เรียก `closeAndAdvancePeriod` ทุก budget) **+** lazy fallback ที่ `budget.service.ts getAll()`/`dashboard.service.ts getSummary()` (จุดที่ query budget ทั้งหมดของ user อยู่แล้ว กัน budget ชุดเดียวกัน advance ไม่พร้อมกัน) — ใช้ทั้งคู่ไม่ใช่เลือกอย่างใดอย่างหนึ่ง เพราะ cron อย่างเดียวเสี่ยง Render free tier sleep พลาดไปทั้งวัน (มีปัญหานี้มาก่อนแล้ว)
+**Phasing**: Phase 3 = RESET+SWEEP+ROLLOVER logic ครบ (สูตรแก้แล้วทั้ง 3 ตัว จริงๆ ROLLOVER กลับง่ายกว่า RESET ตอนนี้ — RESET ต้องมี pool/2-pass/monthlyTarget field, ROLLOVER เป็น local operation ล้วน), UI เลือก `rolloverPolicy`: ตัวเลือก ROLLOVER **ไม่ disabled ไม่ซ่อน** เพราะ logic พร้อมใช้จริงตั้งแต่ Phase 3 แล้ว (ต่างจาก draft แรกที่วางแผนดอง ROLLOVER ไว้ Phase 4) — เฟสถัดไปที่เหลือจริงๆ คือ live-test บน production กับ edge case เพิ่มเติมถ้าเจอ ไม่ใช่ logic ที่ยังไม่มี.
 
-**Phasing**: Phase 3 = RESET+SWEEP เท่านั้นก่อน (logic ง่ายกว่า ไม่มี carry-forward), Phase 4 = ROLLOVER (เติม branch เดียวใน `closeAndAdvancePeriod`, schema พร้อมจาก Phase 3 แล้ว) — แยกเพราะ ROLLOVER ทำให้ `allocatedAmount` โตต่อเนื่องข้ามเดือนได้ ต้อง live-test นานกว่า
+**Migration SQL** ร่างแรก (schema+enum+history table+index) อนุมัติแล้ว ณ ตอนตรวจทาน แต่ **ยังไม่ apply ที่ไหนทั้งสิ้น** — ต้องรวม `monthlyTarget` column เข้าไปในไฟล์เดียวกันก่อน (SQL ร่างแรกยังไม่มี field นี้ เกิดทีหลังตอนแก้ RESET) แล้วค่อย apply.
 
-**คำถามที่ยังไม่ได้ตอบก่อนเริ่ม Phase 3** (ต้องถามใน plan mode รอบหน้า):
-1. ถ้า cron ไม่รันติดกัน 2 เดือน (เช่น Render sleep ยาว/GitHub Actions fail) — `closeAndAdvancePeriod` ควรปิดทีละเดือนไล่ตามลำดับ (สร้าง `BudgetMonthlyHistory` ครบทุกเดือนที่ข้ามไป) หรือกระโดดตรงไปเดือนปัจจุบันเลย (เดือนกลางๆ ไม่มี snapshot)? กระทบทั้ง audit trail ความครบถ้วนของ `BudgetMonthlyHistory` และ ROLLOVER carry-forward correctness (ถ้ากระโดดข้าม ROLLOVER คำนวณจากเดือนไหน)
-2. UI เลือก `rolloverPolicy` — ตอน Phase 3 (ยังไม่มี ROLLOVER logic จริง) ตัวเลือก ROLLOVER ใน dropdown ควร disabled (โชว์แต่กดไม่ได้ พร้อม tooltip "เร็วๆ นี้") หรือซ่อนไปเลยจนกว่า Phase 4 จะเสร็จ?
+**Deploy strategy ที่ตกลง**: รัน `prisma migrate deploy` + backfill script ตรงกับ Neon (production DB) จากเครื่อง local ก่อน แล้วค่อย push โค้ดขึ้น — กันช่วงเวลาที่โค้ดใหม่รันแล้วแต่ schema/data ยังไม่พร้อม (production แสดงยอดผิดชั่วคราว).
 
-**ความเสี่ยงหลักที่ระบุไว้แล้ว** (รายละเอียดเต็มอยู่ในบทสนทนา plan mode, ไม่ทวนซ้ำที่นี่): production data migration ต้อง backfill `periodYear/periodMonth` ด้วยเดือนปฏิทิน ณ ตอน deploy, ไม่มี historical `allocatedAmount` ceiling ย้อนหลังก่อน deploy, deadlock risk จาก multi-budget lock (mitigate ด้วย ascending-id lock order pattern เดียวกับที่ใช้ใน borrow แล้ว), test เดิมใน `budget.service.test.ts` ยัง valid เพราะ scalar ทำงานแบบเดิมภายใน 1 period
+**Backfill script** (`backend/scripts/backfill-period-spend.ts`, แยกจาก migration SQL): recompute `spentAmount` ทุก budget ให้เหลือเฉพาะยอดใช้จริงของเดือนปฏิทินปัจจุบัน (Bangkok) — เหตุผล: `spentAmount` เดิมสะสมตลอดกาลจริง (ยืนยันจาก comment `reports.service.ts` เดิม) ถ้าไม่ recompute ตอน stamp `periodYear/periodMonth = เดือนปัจจุบัน` ยอด remaining จะเพี้ยนทันทีทั้งเดือนแรกหลัง deploy. ใช้ `getExpenseByBudget()` จาก `split-aware-spend.ts` ตัวเดิม (จัดการ borrow-split ถูกต้องอยู่แล้ว) **ไม่เขียน join logic ซ้ำเป็น raw SQL** กัน bug จาก duplicate logic.
+
+**คำถามที่ตอบแล้ว** (เดิมค้างไว้ในร่างแรก):
+1. cron ข้ามหลายเดือน → ปิดทีละเดือนไล่ลำดับ (ไม่กระโดด) เก็บ `BudgetMonthlyHistory` ครบทุกเดือน — จำเป็นสำหรับ ROLLOVER carry-forward correctness ด้วย (กระโดดข้ามจะไม่มีเดือนกลางให้อ้างอิง)
+2. UI ROLLOVER dropdown → ไม่เกี่ยวแล้ว เพราะ ROLLOVER logic พร้อมใช้ตั้งแต่ Phase 3 (ดู Phasing ด้านบน)
+
+**Test scope ที่ตกลง**: `assertZeroBasedInvariant(userId)` helper (query จริงแล้ว assert `Σremaining ≤ balance`) เรียกหลัง close ทุก policy ทุกเคส — RESET (fully-funded/partial-fill/pool=0/2 budget แย่ง pool เดียวกัน), ROLLOVER (ปกติ + legacy spent>allocated ยืนยัน clamp), reset budget ที่มี `TransactionSplit` ค้างจาก borrow, ข้ามหลายเดือน, concurrency (cron ชนกับ lazy hook ตอน pool จำกัด — ยืนยัน `lockUser` กันแย่งซ้ำจริง ไม่ใช่แค่ comment), closed-period guard ทั้ง 3 operation.
+
+**ความเสี่ยงอื่นที่ระบุไว้แล้ว** (รายละเอียดเต็มอยู่ในบทสนทนา plan mode 2026-08-14, ไม่ทวนซ้ำที่นี่): deadlock risk จาก multi-budget lock (mitigate ด้วย `lockUser` advisory lock แบบเดียวกับที่ borrow feature ใช้แล้ว), test เดิมใน `budget.service.test.ts` ยัง valid เพราะ scalar ทำงานแบบเดิมภายใน 1 period.
+
+**สถานะ**: ยังไม่ได้เขียนโค้ดสักบรรทัด — session หน้าเริ่มจาก confirm schema+migration SQL ฉบับเต็ม (รวม `monthlyTarget` + index ที่แก้แล้ว) ก่อนแตะโค้ดจริง.
 
 ### Environment ที่ต้องเตรียมก่อนเริ่ม Phase 3
 
