@@ -202,3 +202,21 @@ Remove-Item Env:\SEED_ADMIN_PASSWORD
 **หมายเหตุสำคัญ**: production มี `admin@budgetflow.app` อยู่แล้ว (เจ้าของเปลี่ยนรหัสเองแล้วผ่าน Settings ก่อนหน้านี้) → seed จะเข้า branch `update` เสมอ → **`SEED_ADMIN_PASSWORD` จะไม่มีผลอะไรกับ production เลย** (ตามที่ตั้งใจออกแบบ) สิ่งที่ seed รอบนี้จะทำจริงบน production คือสร้าง `demo@budgetflow.app` ใหม่พร้อมข้อมูลตัวอย่างเท่านั้น — ข้อมูลเดิมของ admin (account/budgets/transactions จริงทั้งหมด) ไม่ถูกแตะเลย ยืนยันแล้วด้วยการรัน seed ซ้ำ 2 รอบ local ว่า idempotent จริง (ไม่มี duplicate, balance ไม่ถูกบวกซ้ำ)
 
 **ต้องทำหลัง deploy**: อย่าลืมเปลี่ยน `LoginPage.tsx` hint (commit นี้) ต้องขึ้น production จริงด้วย ไม่ใช่แค่ backend seed — ทั้งสองฝั่งต้องขึ้นพร้อมกัน ไม่งั้นหน้า login จะยังโฆษณา credential เก่าอยู่
+
+---
+
+## รอบ 2026-08-14 — Borrow-from-budget (Phase 1+2) ขึ้น production
+
+**Commits**: `9931fa3` (Phase 1+2 หลัก — schema `TransactionSplit`, service logic, `BorrowBudgetModal`), `1d6097f` (fix: badge→detail line มือถือ hover ไม่ได้) — push ขึ้น `main` แล้วทั้งคู่
+
+**Migration**: `20260814060819_add_transaction_splits` — ยืนยันแล้วว่า pure additive (`CREATE TABLE transaction_splits` + 2 index + 2 FK constraint เท่านั้น ไม่มี `ALTER` ตารางเดิมสักบรรทัด) Render build command เดิม (`npm ci && npm run build && npm run db:migrate:prod`) รัน `prisma migrate deploy` เองตาม flow ปกติ ไม่ต้องรันมือ
+
+**Seed**: **ไม่ต้องรัน** `db:seed` ใหม่ — ไม่ได้แก้ `seed.ts` เลยรอบนี้ ตาราง `transaction_splits` เริ่มว่างเปล่าเองตามธรรมชาติ (populate เฉพาะตอนมี borrow เกิดขึ้นจริงผ่าน UI)
+
+**Deploy flow ที่ใช้จริง**: push → main → Render redeploy อัตโนมัติ (migration รันใน build command), Vercel redeploy อัตโนมัติ (auto-deploy on push ตาม config เดิม) — ไม่ต้องแตะ Render/Vercel dashboard เลยรอบนี้ ต่างจากรอบ 2026-08-03/08-04/08-10 ก่อนหน้าที่ต้องรัน seed มือ
+
+**ทดสอบ**: local dev เท่านั้น (browser จริง, golden path + empty-state + cancel-keeps-data + edit-drops-split + concurrency test) — **ยังไม่ได้ทดสอบบน production จริง** โดยเฉพาะ mobile viewport ของ `BorrowBudgetModal` และบรรทัดรายละเอียด split ใน `TransactionsPage` (เครื่องมือ browser automation ที่ใช้ resize ไม่ mirror ไปที่ screenshot ในเครื่อง dev — ยืนยันแค่ผ่าน DOM query ว่า markup ถูกต้อง ไม่ใช่เห็นด้วยตาจริง) — user จะเทสเองบน production ก่อนสั่ง Phase 3 ต่อ
+
+**ที่ต้องเตรียมก่อน Phase 3** (ดูรายละเอียดสรุป scope เต็มใน `CLAUDE.md` § "Monthly Reset + Borrow-from-budget — แผนงาน Phase 3/4"):
+- `docker start budgetflow-db` (มีทั้ง `budgetflow` + `budgetflow_test` อยู่แล้วในตัว container เดียว)
+- Neon branch `backup-before-phase3` สำหรับ rollback ก่อนแตะ production schema รอบใหญ่ (Phase 3 เพิ่ม column บน `Budget` ตารางที่มีข้อมูลจริงอยู่แล้ว ต่างจาก Phase 1+2 ที่เป็นตารางใหม่ล้วนความเสี่ยงต่ำกว่า)

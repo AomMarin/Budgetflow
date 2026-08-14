@@ -219,6 +219,21 @@ Auth routes (`/login`, `/register`) are guest-only; all others require auth via 
 - **Backend** `src/features/households/`: create/invite/join(code)/removeMember/leave/deleteHousehold/getOverview — `getOverview` ไม่แตะ repository เดิมเลย แค่เรียก `DashboardService.getSummary(userId)` ซ้ำต่อสมาชิกแต่ละคนแล้วรวมผล (เขียนใหม่ทั้งหมด ไม่กระทบ Account/Budget/Transaction เดิม)
 - **Frontend** หน้าใหม่ `src/features/household/HouseholdPage.tsx` (ย้ายออกจาก Settings แล้ว) + เมนู "Family Budget" ใน `Sidebar.tsx` (ยังไม่ใส่ใน BottomNav เพราะเต็ม 5 ปุ่มแล้ว เหมือน Reports/Import/Admin — เข้าถึงได้ทางอื่นบนมือถือแล้ว ดู #9)
 
+#### 10. Borrow-from-budget — Phase 1+2 (deployed, 2026-08-14)
+
+ปัญหาเดิม: EXPENSE เกินงบ → บล็อก + ต้องไปหน้า Transfers โยกงบถาวร (เปลี่ยน `allocatedAmount` ค้างไปเดือนหน้าด้วย) แก้โดยเพิ่ม "ยืม" ที่ไม่แตะ `allocatedAmount` ของทั้งสองงบเลย — เฉพาะ `spentAmount`
+
+- **Schema**: `TransactionSplit` (`transactionId`, `budgetId`, `amount`) — **additive-only**: มี row ก็ต่อเมื่อ transaction นั้น borrow จริง (ส่วนใหญ่ไม่มี row เลย, `Transaction.budgetId` ยังเป็นความจริงหลักเหมือนเดิม) — ประเมินทางเลือกอื่นแล้ว (column คู่บน `Transaction`, หรือ split ทุก transaction เสมอ) เลือกแบบนี้เพราะ blast radius เล็กสุด ไม่ต้องแก้จุดที่ยังอ่าน `Transaction.budgetId` ตรงๆ (dropdown, filter, ImportRule, RecurringTransaction, batchCreate)
+- **Backend** `transaction.service.ts`: generalize create/update/delete ให้วนบน splits array (implicit 1-split เมื่อไม่ borrow, unify code path) — lock budget ตามลำดับ `[...new Set([primary, borrow])].sort()` เสมอเมื่อมี borrow (ทั้ง create และ update) กัน deadlock ข้ามกันของ 2 transaction ที่ borrow สลับบทบาทกัน — `batchCreate()` **ไม่รองรับ** borrow (ตัดสินใจแล้ว ดู known gaps ด้านล่าง)
+- **Backend** `utils/split-aware-spend.ts` (`getExpenseByBudget`) — ใช้ร่วมกันใน `reports.service.ts` (2 จุด: `getMonthToDateSpendByBudget`, `getMonthlyReport` budgetBreakdown) + `dashboard.service.ts` (`getSpendingByBudget`) — merge สอง query (มี split / ไม่มี split) แทนการ groupBy ตรงๆ
+- **Frontend** `BorrowBudgetModal.tsx` (ไฟล์ใหม่) — เด้งตอนกด submit ถ้า EXPENSE เกินงบ (ไม่ redirect ไป Transfers อีกต่อไป) แสดง `รายการ ฿X − งบเหลือ ฿Y = ต้องยืม ฿Z`, list งบอื่นเลือกได้ (พอไม่พอ disable+เหตุผล, ไม่รวมงบตัวเองและงบ archived), ข้อความแยกชัดจาก Transfers ("ครั้งนี้เท่านั้น allocatedAmount ไม่เปลี่ยน"), ไม่มีงบไหนพอ → บอกทางออก (ลดยอด/ไปจัดสรรเพิ่ม) — ซ้อนบน `TransactionForm` โดยไม่ unmount ฟอร์มเดิม (cancel แล้วข้อมูลฟอร์มยังอยู่ครบ, `handleFormClose` กัน Escape ทะลุปิดสองชั้นพร้อมกัน)
+- **Frontend** `TransactionsPage.tsx` — บรรทัดรายละเอียด split ใต้ description (เช่น `Shopping ฿1,000 · ยืมจาก Food & Dining ฿50`) แสดงถาวรไม่ต้อง hover (เดิมเคยเป็น badge+tooltip แล้วพบว่ามือถือใช้ไม่ได้ — เปลี่ยนแล้ว) generalize รองรับ borrow หลายงบในอนาคต (join ด้วย comma ไม่ hardcode 2 split)
+- **Frontend** `useTransactions.ts` — toast แยกข้อความยืม (ใช้ยอด/ชื่องบจาก API response จริง ไม่เดา), เพิ่ม `['reports']` invalidation ที่หลุดไปก่อนหน้าใน mutation hook ทุกตัว
+- **Migration**: `20260814060819_add_transaction_splits` — pure additive (`CREATE TABLE` + 2 index + 2 FK) ไม่แตะตารางเดิม
+- **Commits**: `9931fa3` (Phase 1+2 หลัก), `1d6097f` (fix: badge→detail line) — ทั้งคู่ push ขึ้น `main` แล้ว, Render/Vercel auto-deploy ไปแล้ว (migration รันผ่าน `db:migrate:prod` ใน build command เดิม) — **ไม่ต้องรัน seed ใหม่** (ไม่ได้แก้ `seed.ts`)
+- **Test**: backend 25/25 ผ่าน (`transaction.borrow.test.ts` ใหม่ 9 เคส รวม concurrency 2 borrow ข้ามกัน) — ทดสอบ live ผ่าน browser จริงครบ golden path/empty-state/cancel-keeps-data/edit-drops-split บน local dev
+- **ยังไม่ได้ทดสอบ**: mobile viewport จริง (390px) ของ `BorrowBudgetModal` และบรรทัด split ใน `TransactionsPage` — เครื่องมือ browser automation ที่ใช้ resize ไม่ mirror ไปที่ screenshot ในเครื่องนี้ ยืนยันแค่ผ่าน DOM query ว่า markup/class ถูกต้อง (mirror `Modal.tsx` bottom-sheet pattern เดิมที่ผ่าน production มาแล้ว) — **ยังไม่เคยเห็นด้วยตาบน production จริง**
+
 #### 9. Mobile: keep-alive heartbeat + overflow menu (logout, Reports/Import/Family Budget/Admin)
 - **`hooks/useKeepAlive.ts`** (ไฟล์ใหม่): ping `warmUpBackend()` ทุก 10 นาทีระหว่าง session ที่ login อยู่ (`enabled` ผูกกับ `isAuthenticated`) เพื่อกัน Render free tier spin down ที่ 15 นาที — ผูกกับ `visibilitychange`: หยุด ping ทันทีเมื่อแท็บ hidden (`clearInterval`), ping ทันที 1 ครั้ง + เริ่ม interval ใหม่เมื่อกลับมา visible (สำคัญบนมือถือเพราะ browser throttle background timer เองอยู่แล้ว) เรียกที่เดียวใน `AppLayout.tsx` ไม่ผ่าน TanStack Query
 - **ปัญหาที่เจอ**: `Sidebar.tsx` เป็นที่เดียวในระบบที่มีปุ่ม logout แต่ตัว `<aside>` เอง `hidden md:flex` — มือถือไม่มีทาง logout เลย, และ Reports/Import/Family Budget/Admin ก็เข้าไม่ถึงเช่นกันเพราะ `BottomNav` มีแค่ 5 ปุ่ม
@@ -235,3 +250,57 @@ Auth routes (`/login`, `/register`) are guest-only; all others require auth via 
 - Household ยัง read-only อย่างเดียว — ยังไม่มี shared/pooled budget ที่แก้ไขร่วมกันได้จริง (เคยประเมินไว้ว่าเสี่ยง race condition + ต้องแก้ invariant ทั้งระบบ ถ้าจะทำต้องคุยเรื่อง scope ใหม่)
 - Notification เป็น in-app เท่านั้น ยังไม่มี email/push จริง (ไม่มี SMTP/VAPID credentials)
 - Cron รันครั้งเดียวต่อวันตาม timezone เดียว (Asia/Bangkok) ไม่ได้ปรับตาม `User.timezone` ของแต่ละคน
+- `recurring.service.ts`/`import.service.ts` ไม่ผ่าน `TransactionService` เลย (เขียน side-effect เอง) — **ไม่มี budget-insufficient check, ไม่ lock แถว** ต่างจาก `transaction.service.ts` create/update — เป็น gap เดิมตั้งแต่ก่อน Borrow feature ไม่ใช่ regression ใหม่ พึ่ง `notifyBudgetAlerts` แจ้งย้อนหลังแทน ยังไม่ตัดสินใจว่าจะให้ borrow เข้าถึง path นี้ด้วยไหม
+- `batchCreate()` (transaction batch entry) ไม่รองรับ borrow — เกิน budget ใน batch row ยัง throw `BUDGET_INSUFFICIENT` เดิม (ตัดสินใจแล้วว่าตัด scope ตรงๆ เพราะ batch ไม่มี per-row UI ให้เลือก borrow source)
+
+### Monthly Reset + Borrow-from-budget — แผนงาน Phase 3/4 (ยังไม่เริ่ม)
+
+Design doc เต็มร่างไว้ตอน plan mode วันที่ 2026-08-14 (ไฟล์ plan อยู่นอก repo — เครื่อง user เท่านั้น) สรุป scope ที่ตกลงไว้เก็บไว้ที่นี่ให้ self-contained:
+
+**Schema ที่จะเพิ่ม** (ยังไม่ implement):
+```prisma
+enum RolloverPolicy { RESET  ROLLOVER  SWEEP }
+
+model Budget {
+  // ...fields เดิม...
+  rolloverPolicy RolloverPolicy @default(RESET)
+  periodYear     Int   // เดือน/ปีที่ allocatedAmount/spentAmount ปัจจุบัน "แทน" อยู่
+  periodMonth    Int
+}
+
+model BudgetMonthlyHistory {
+  id, budgetId, userId, year, month
+  allocatedAmount Decimal  // ceiling ตอนปิดเดือนนั้น
+  spentAmount     Decimal  // ยอดใช้สุดท้ายตอนปิด
+  rolloverPolicy  RolloverPolicy
+  closedAt        DateTime @default(now())
+  @@unique([budgetId, year, month])
+}
+```
+
+**หลักการสำคัญ**: `Budget.allocatedAmount`/`spentAmount` ยังอ่านตรงๆ เหมือนเดิมทุกจุด (`addStats()`, `getSummary()`, `checkAlerts()`, zero-based invariant) — ตีความใหม่เป็น "ยอดของ `periodYear`/`periodMonth` ปัจจุบันเท่านั้น" **ไม่ต้องแก้ reader เหล่านี้เลย** ตัด blast radius ใหญ่สุดของ feature นี้ลง — reports ที่ query จาก `Transaction.date` อยู่แล้ว (groupBy + date filter) ก็ปลอดภัยต่อมิติเวลาอยู่แล้วเช่นกัน ไม่ต้องแก้
+
+**Reset logic ต่อ budget** (idempotent, เรียกซ้ำได้): ถ้า `periodYear/Month` ตรงกับปัจจุบันแล้ว → no-op — ไม่งั้น snapshot ลง `BudgetMonthlyHistory` แล้ว apply ตาม policy: `RESET` (spent=0, allocated **ไม่แตะ** เลย แม้เคยแก้กลางเดือนไว้ — ยืนยันแล้วกับ user), `ROLLOVER` (spent=0, allocated += remaining เดือนก่อน), `SWEEP` (spent=0, allocated=0)
+
+**เกณฑ์ "เดือนปิดแล้ว"**: ผูกกับ `budget.periodYear/periodMonth` เท่านั้น **ไม่ใช้ wall-clock เทียบตรงๆ** — `(transaction.date's year,month) < (budget.periodYear, budget.periodMonth)` ถึงจะถือว่าปิด ใช้เกณฑ์เดียวกันไม่ว่า trigger จาก cron หรือ lazy eval (กัน edge case cron delay ที่ periodYear/Month ยังไม่ทันขยับ)
+
+**บล็อกทั้ง create/update/delete** ของ transaction ที่ date ตกอยู่ในเดือนปิดแล้ว (ทั้ง 2 ทิศทาง: แก้ของเก่าให้เข้าเดือนปิด และสร้างใหม่ย้อนหลังเข้าเดือนปิด) — ตัดสินใจแล้ว (ไม่ใช่แค่ block edit, สร้างย้อนหลังก็บล็อกเหมือนกันเพื่อกฎเป็นเส้นเดียว) error message ต้องบอกทางออกด้วย ไม่ใช่แค่บอกว่าทำไม่ได้:
+```
+รายการนี้อยู่ในเดือนที่ปิดแล้ว แก้ไขไม่ได้
+หากต้องการปรับปรุง ให้บันทึกรายการใหม่ในเดือนปัจจุบันแทน
+```
+
+**Job execution**: cron (ต่อจาก `daily.job.ts` เดิม, เพิ่ม loop เรียก `closeAndAdvancePeriod` ทุก budget) **+** lazy fallback ที่ `budget.service.ts getAll()`/`dashboard.service.ts getSummary()` (จุดที่ query budget ทั้งหมดของ user อยู่แล้ว กัน budget ชุดเดียวกัน advance ไม่พร้อมกัน) — ใช้ทั้งคู่ไม่ใช่เลือกอย่างใดอย่างหนึ่ง เพราะ cron อย่างเดียวเสี่ยง Render free tier sleep พลาดไปทั้งวัน (มีปัญหานี้มาก่อนแล้ว)
+
+**Phasing**: Phase 3 = RESET+SWEEP เท่านั้นก่อน (logic ง่ายกว่า ไม่มี carry-forward), Phase 4 = ROLLOVER (เติม branch เดียวใน `closeAndAdvancePeriod`, schema พร้อมจาก Phase 3 แล้ว) — แยกเพราะ ROLLOVER ทำให้ `allocatedAmount` โตต่อเนื่องข้ามเดือนได้ ต้อง live-test นานกว่า
+
+**คำถามที่ยังไม่ได้ตอบก่อนเริ่ม Phase 3** (ต้องถามใน plan mode รอบหน้า):
+1. ถ้า cron ไม่รันติดกัน 2 เดือน (เช่น Render sleep ยาว/GitHub Actions fail) — `closeAndAdvancePeriod` ควรปิดทีละเดือนไล่ตามลำดับ (สร้าง `BudgetMonthlyHistory` ครบทุกเดือนที่ข้ามไป) หรือกระโดดตรงไปเดือนปัจจุบันเลย (เดือนกลางๆ ไม่มี snapshot)? กระทบทั้ง audit trail ความครบถ้วนของ `BudgetMonthlyHistory` และ ROLLOVER carry-forward correctness (ถ้ากระโดดข้าม ROLLOVER คำนวณจากเดือนไหน)
+2. UI เลือก `rolloverPolicy` — ตอน Phase 3 (ยังไม่มี ROLLOVER logic จริง) ตัวเลือก ROLLOVER ใน dropdown ควร disabled (โชว์แต่กดไม่ได้ พร้อม tooltip "เร็วๆ นี้") หรือซ่อนไปเลยจนกว่า Phase 4 จะเสร็จ?
+
+**ความเสี่ยงหลักที่ระบุไว้แล้ว** (รายละเอียดเต็มอยู่ในบทสนทนา plan mode, ไม่ทวนซ้ำที่นี่): production data migration ต้อง backfill `periodYear/periodMonth` ด้วยเดือนปฏิทิน ณ ตอน deploy, ไม่มี historical `allocatedAmount` ceiling ย้อนหลังก่อน deploy, deadlock risk จาก multi-budget lock (mitigate ด้วย ascending-id lock order pattern เดียวกับที่ใช้ใน borrow แล้ว), test เดิมใน `budget.service.test.ts` ยัง valid เพราะ scalar ทำงานแบบเดิมภายใน 1 period
+
+### Environment ที่ต้องเตรียมก่อนเริ่ม Phase 3
+
+- `docker start budgetflow-db` — container เดียวมีทั้ง `budgetflow` (dev) และ `budgetflow_test` (test suite) DB อยู่แล้ว ไม่ต้องสร้างใหม่
+- Neon branch `backup-before-phase3` — เตรียมไว้สำหรับ rollback ก่อนแตะ production schema รอบใหญ่ (migration ADD COLUMN บน `Budget` ที่มีข้อมูลจริงอยู่แล้ว)
