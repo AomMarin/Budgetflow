@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Search, Pencil, Trash2, Receipt, ListPlus, ArrowLeftRight } from 'lucide-react';
+import { Plus, Search, Pencil, Trash2, Receipt, ListPlus } from 'lucide-react';
 import { useTransactions, useDeleteTransaction } from '@/hooks/useTransactions';
 import { useBudgets } from '@/hooks/useBudgets';
 import { Transaction } from '@/types';
@@ -12,20 +12,21 @@ import { TableRowSkeleton } from '@/components/ui/Skeleton';
 import { TransactionForm } from './TransactionForm';
 import { BatchTransactionModal } from './BatchTransactionModal';
 
-// Present only for the rare EXPENSE that borrowed overflow from a second
-// budget (see backend TransactionSplit) — null for the common case.
-function borrowTooltip(tx: Transaction): string | null {
-  const borrowSplit = tx.splits?.find((s) => s.budgetId !== tx.budgetId);
-  if (!borrowSplit) return null;
-  return `ยืมจาก "${borrowSplit.budget?.name ?? 'งบอื่น'}" ${formatCurrency(Number(borrowSplit.amount))}`;
-}
+// Always-visible breakdown line for a borrow transaction, e.g.
+// "ค่าอาหาร ฿40 · ยืมจาก ช้อปปิ้ง ฿10" — null for the common case (no splits).
+// Joins every non-primary split so a future multi-budget borrow (schema
+// already supports it) lists all of them, not just one.
+function splitDetailText(tx: Transaction): string | null {
+  if (!tx.splits || tx.splits.length === 0) return null;
+  const primary = tx.splits.find((s) => s.budgetId === tx.budgetId);
+  const borrowed = tx.splits.filter((s) => s.budgetId !== tx.budgetId);
+  if (!primary || borrowed.length === 0) return null;
 
-function BorrowBadge({ tooltip }: { tooltip: string }) {
-  return (
-    <span title={tooltip} className="inline-flex items-center text-amber-500 dark:text-amber-400 shrink-0">
-      <ArrowLeftRight className="w-3 h-3" />
-    </span>
-  );
+  const primaryName = primary.budget?.name ?? tx.budget?.name ?? 'งบนี้';
+  const borrowedText = borrowed
+    .map((s) => `${s.budget?.name ?? 'งบอื่น'} ${formatCurrency(Number(s.amount))}`)
+    .join(', ');
+  return `${primaryName} ${formatCurrency(Number(primary.amount))} · ยืมจาก ${borrowedText}`;
 }
 
 export function TransactionsPage() {
@@ -141,17 +142,16 @@ export function TransactionsPage() {
                   {tx.budget?.icon ?? '💳'}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="flex items-center gap-1.5 text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
-                    <span className="truncate">{tx.description}</span>
-                    {(() => {
-                      const tooltip = borrowTooltip(tx);
-                      return tooltip ? <BorrowBadge tooltip={tooltip} /> : null;
-                    })()}
-                  </p>
+                  <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{tx.description}</p>
                   <p className="text-xs text-gray-400">
                     {formatDate(tx.date)}
                     {tx.budget && <> · {tx.budget.name}</>}
                   </p>
+                  {splitDetailText(tx) && (
+                    <p className="text-[11px] text-gray-400/80 dark:text-gray-500 truncate mt-0.5">
+                      {splitDetailText(tx)}
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <span className={`text-sm font-semibold ${tx.type === 'INCOME' ? 'text-green-600' : 'text-red-500'}`}>
@@ -218,11 +218,12 @@ export function TransactionsPage() {
                       {tx.isImported && (
                         <Badge variant="info" className="text-[10px]">imported</Badge>
                       )}
-                      {(() => {
-                        const tooltip = borrowTooltip(tx);
-                        return tooltip ? <BorrowBadge tooltip={tooltip} /> : null;
-                      })()}
                     </div>
+                    {splitDetailText(tx) && (
+                      <div className="text-[11px] text-gray-400/80 dark:text-gray-500 mt-0.5">
+                        {splitDetailText(tx)}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     {tx.budget ? (
