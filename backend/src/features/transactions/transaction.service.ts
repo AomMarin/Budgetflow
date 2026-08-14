@@ -1,8 +1,12 @@
+import { Prisma } from '@prisma/client';
 import { TransactionRepository } from './transaction.repository';
 import { CreateTransactionDto, UpdateTransactionDto, TransactionFilters } from './transaction.dto';
 import { BudgetRepository } from '../budgets/budget.repository';
 import { prisma } from '../../config/database';
 import { buildPaginationMeta } from '../../utils/response';
+
+type BudgetLockRow = { id: string; name: string; allocatedAmount: string; spentAmount: string };
+type Split = { budgetId: string; amount: number };
 
 export class TransactionService {
   constructor(
@@ -23,32 +27,114 @@ export class TransactionService {
     return tx;
   }
 
+  // Row-locked read: prevents a concurrent expense against the same budget
+  // from both passing the check against the same stale spentAmount.
+  private async lockBudgetRow(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    budgetId: string,
+  ): Promise<BudgetLockRow> {
+    const [row] = await tx.$queryRaw<BudgetLockRow[]>`
+      SELECT id, name, "allocatedAmount", "spentAmount" FROM budgets
+      WHERE id = ${budgetId} AND "userId" = ${userId} FOR UPDATE`;
+    if (!row) throw Object.assign(new Error('Budget not found'), { status: 404 });
+    return row;
+  }
+
+  // Pure validation over already-locked rows — decides whether the expense
+  // fits in the primary budget alone (returns [], the common case: caller
+  // keeps the old single-budget spentAmount increment, no split rows) or
+  // must borrow overflow from a second budget (returns exactly 2 splits
+  // summing to `amount`). `reversedAmounts` lets update() offset a budget's
+  // remaining by whatever this same transaction previously contributed to it
+  // (generalizes the old single-budget "oldContribution" trick to N budgets).
+  private computeExpenseSplits(
+    primary: BudgetLockRow,
+    amount: number,
+    borrow: BudgetLockRow | null,
+    reversedAmounts: Map<string, number>,
+  ): Split[] {
+    const primaryRemaining =
+      Number(primary.allocatedAmount) - Number(primary.spentAmount) + (reversedAmounts.get(primary.id) ?? 0);
+
+    if (amount <= primaryRemaining) return [];
+
+    if (!borrow) {
+      throw Object.assign(
+        new Error(
+          `งบ "${primary.name}" ไม่พอ — เหลือ ${primaryRemaining.toFixed(2)} บาท ขาด ${(amount - primaryRemaining).toFixed(2)} บาท กรุณาโยกงบจากกลุ่มอื่นก่อน หรือเลือกยืมจากงบอื่น`,
+        ),
+        { status: 400, code: 'BUDGET_INSUFFICIENT' },
+      );
+    }
+    if (borrow.id === primary.id) {
+      throw Object.assign(new Error('ไม่สามารถยืมจากงบเดียวกันได้'), { status: 400 });
+    }
+
+    const overflow = amount - primaryRemaining;
+    const borrowRemaining =
+      Number(borrow.allocatedAmount) - Number(borrow.spentAmount) + (reversedAmounts.get(borrow.id) ?? 0);
+
+    if (overflow > borrowRemaining) {
+      throw Object.assign(
+        new Error(
+          `งบ "${borrow.name}" ที่จะยืมก็มีไม่พอ — เหลือ ${borrowRemaining.toFixed(2)} บาท ขาด ${(overflow - borrowRemaining).toFixed(2)} บาท`,
+        ),
+        { status: 400, code: 'BUDGET_INSUFFICIENT' },
+      );
+    }
+
+    return [
+      { budgetId: primary.id, amount: Math.round(primaryRemaining * 100) / 100 },
+      { budgetId: borrow.id, amount: Math.round(overflow * 100) / 100 },
+    ];
+  }
+
+  // Locks the primary budget (and, if a borrow is requested, the borrow
+  // budget too) and resolves the split. Always locks in ascending budgetId
+  // order across BOTH ids whenever a borrow is requested — regardless of
+  // which one ends up being "primary" in this call — so two concurrent
+  // transactions borrowing from each other's budget can never deadlock
+  // (classic AB/BA pattern otherwise).
+  private async lockAndResolveExpenseSplits(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    budgetId: string,
+    amount: number,
+    borrowFromBudgetId: string | null | undefined,
+    reversedAmounts: Map<string, number>,
+  ): Promise<Split[]> {
+    const wantsBorrow = !!borrowFromBudgetId;
+    const lockIds = wantsBorrow ? [...new Set([budgetId, borrowFromBudgetId as string])].sort() : [budgetId];
+
+    const locked = new Map<string, BudgetLockRow>();
+    for (const id of lockIds) locked.set(id, await this.lockBudgetRow(tx, userId, id));
+
+    const primary = locked.get(budgetId)!;
+    const borrow = wantsBorrow ? locked.get(borrowFromBudgetId as string)! : null;
+    return this.computeExpenseSplits(primary, amount, borrow, reversedAmounts);
+  }
+
   async create(userId: string, dto: CreateTransactionDto, actorUserId?: string) {
     const transaction = await prisma.$transaction(async (tx) => {
-      // Row-locked reads: prevents a concurrent expense against the same
-      // budget from both passing the check against the same stale spentAmount.
       const [account] = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT id FROM accounts WHERE id = ${dto.accountId} AND "userId" = ${userId} FOR UPDATE`;
       if (!account) throw Object.assign(new Error('Account not found'), { status: 404 });
 
-      if (dto.budgetId) {
-        const [budget] = await tx.$queryRaw<
-          Array<{ id: string; name: string; allocatedAmount: string; spentAmount: string }>
-        >`SELECT id, name, "allocatedAmount", "spentAmount" FROM budgets
-           WHERE id = ${dto.budgetId} AND "userId" = ${userId} FOR UPDATE`;
-        if (!budget) throw Object.assign(new Error('Budget not found'), { status: 404 });
-
-        if (dto.type === 'EXPENSE') {
-          const remaining = Number(budget.allocatedAmount) - Number(budget.spentAmount);
-          if (dto.amount > remaining) {
-            throw Object.assign(
-              new Error(
-                `งบ "${budget.name}" ไม่พอ — เหลือ ${remaining.toFixed(2)} บาท ขาด ${(dto.amount - remaining).toFixed(2)} บาท กรุณาโยกงบจากกลุ่มอื่นก่อน`,
-              ),
-              { status: 400, code: 'BUDGET_INSUFFICIENT' },
-            );
-          }
-        }
+      let splits: Split[] = [];
+      if (dto.budgetId && dto.type === 'EXPENSE') {
+        splits = await this.lockAndResolveExpenseSplits(
+          tx,
+          userId,
+          dto.budgetId,
+          dto.amount,
+          dto.borrowFromBudgetId,
+          new Map(),
+        );
+      } else if (dto.budgetId) {
+        // Non-EXPENSE with a budget: keep the existing lock-but-don't-check
+        // behavior unchanged.
+        await this.lockBudgetRow(tx, userId, dto.budgetId);
       }
 
       const created = await this.repo.create(
@@ -75,11 +161,23 @@ export class TransactionService {
           where: { id: dto.accountId },
           data: { balance: { decrement: dto.amount } },
         });
-        if (dto.budgetId) {
+        if (splits.length > 0) {
+          for (const s of splits) {
+            await tx.budget.update({ where: { id: s.budgetId }, data: { spentAmount: { increment: s.amount } } });
+          }
+          await tx.transactionSplit.createMany({
+            data: splits.map((s) => ({ transactionId: created.id, budgetId: s.budgetId, amount: s.amount })),
+          });
+        } else if (dto.budgetId) {
           await tx.budget.update({
             where: { id: dto.budgetId },
             data: { spentAmount: { increment: dto.amount } },
           });
+        }
+
+        if (splits.length > 0) {
+          // Just created in this same transaction — guaranteed to exist.
+          return (await this.repo.findByIdWithSplits(created.id, tx))!;
         }
       }
 
@@ -99,35 +197,38 @@ export class TransactionService {
       );
     }
 
+    const existingSplits = await prisma.transactionSplit.findMany({ where: { transactionId: id } });
+
     const newType = dto.type ?? existing.type;
     const newBudgetId = dto.budgetId !== undefined ? dto.budgetId : existing.budgetId;
     const newAmount = dto.amount ?? Number(existing.amount);
+    // Never inherited from the prior state — see UpdateTransactionDto comment.
+    const newBorrowFromBudgetId = dto.borrowFromBudgetId ?? null;
+
+    // What this same transaction previously contributed to each budget, so
+    // the remaining-amount check below isn't tripped by its own old effect.
+    const oldContributionMap = new Map<string, number>();
+    if (existing.type === 'EXPENSE') {
+      if (existingSplits.length > 0) {
+        for (const s of existingSplits) oldContributionMap.set(s.budgetId, Number(s.amount));
+      } else if (existing.budgetId) {
+        oldContributionMap.set(existing.budgetId, Number(existing.amount));
+      }
+    }
 
     return prisma.$transaction(async (tx) => {
+      let newSplits: Split[] = [];
       if (newType === 'EXPENSE' && newBudgetId) {
-        // Row-locked read: prevents a concurrent expense against the same
-        // budget from both passing the check against the same stale spentAmount.
-        const [budget] = await tx.$queryRaw<
-          Array<{ id: string; name: string; allocatedAmount: string; spentAmount: string }>
-        >`SELECT id, name, "allocatedAmount", "spentAmount" FROM budgets
-           WHERE id = ${newBudgetId} AND "userId" = ${userId} FOR UPDATE`;
-        if (!budget) throw Object.assign(new Error('Budget not found'), { status: 404 });
-
-        const currentRemaining = Number(budget.allocatedAmount) - Number(budget.spentAmount);
-        // If the same budget, the old amount will be freed up after reversal
-        const oldContribution = (existing.type === 'EXPENSE' && existing.budgetId === newBudgetId)
-          ? Number(existing.amount)
-          : 0;
-        const effectiveRemaining = currentRemaining + oldContribution;
-
-        if (newAmount > effectiveRemaining) {
-          throw Object.assign(
-            new Error(
-              `งบ "${budget.name}" ไม่พอ — เหลือ ${effectiveRemaining.toFixed(2)} บาท ขาด ${(newAmount - effectiveRemaining).toFixed(2)} บาท กรุณาโยกงบจากกลุ่มอื่นก่อน`,
-            ),
-            { status: 400, code: 'BUDGET_INSUFFICIENT' },
-          );
-        }
+        newSplits = await this.lockAndResolveExpenseSplits(
+          tx,
+          userId,
+          newBudgetId,
+          newAmount,
+          newBorrowFromBudgetId,
+          oldContributionMap,
+        );
+      } else if (newBudgetId) {
+        await this.lockBudgetRow(tx, userId, newBudgetId);
       }
 
       // Reverse old effects
@@ -141,13 +242,21 @@ export class TransactionService {
           where: { id: existing.accountId },
           data: { balance: { increment: Number(existing.amount) } },
         });
-        if (existing.budgetId) {
+        if (existingSplits.length > 0) {
+          for (const s of existingSplits) {
+            await tx.budget.update({
+              where: { id: s.budgetId },
+              data: { spentAmount: { decrement: Number(s.amount) } },
+            });
+          }
+        } else if (existing.budgetId) {
           await tx.budget.update({
             where: { id: existing.budgetId },
             data: { spentAmount: { decrement: Number(existing.amount) } },
           });
         }
       }
+      await tx.transactionSplit.deleteMany({ where: { transactionId: id } });
 
       // Apply new effects
       if (newType === 'INCOME') {
@@ -160,7 +269,14 @@ export class TransactionService {
           where: { id: existing.accountId },
           data: { balance: { decrement: newAmount } },
         });
-        if (newBudgetId) {
+        if (newSplits.length > 0) {
+          for (const s of newSplits) {
+            await tx.budget.update({ where: { id: s.budgetId }, data: { spentAmount: { increment: s.amount } } });
+          }
+          await tx.transactionSplit.createMany({
+            data: newSplits.map((s) => ({ transactionId: id, budgetId: s.budgetId, amount: s.amount })),
+          });
+        } else if (newBudgetId) {
           await tx.budget.update({
             where: { id: newBudgetId },
             data: { spentAmount: { increment: newAmount } },
@@ -183,6 +299,8 @@ export class TransactionService {
     });
   }
 
+  // No borrow support here: batch entry has no per-row UI to pick a borrow
+  // source, so an over-budget row still fails exactly as before.
   async batchCreate(userId: string, items: CreateTransactionDto[]): Promise<number> {
     if (items.length === 0) return 0;
 
@@ -264,6 +382,8 @@ export class TransactionService {
       );
     }
 
+    const splits = await prisma.transactionSplit.findMany({ where: { transactionId: id } });
+
     await prisma.$transaction(async (tx) => {
       if (existing.type === 'INCOME') {
         await tx.account.update({
@@ -275,7 +395,14 @@ export class TransactionService {
           where: { id: existing.accountId },
           data: { balance: { increment: Number(existing.amount) } },
         });
-        if (existing.budgetId) {
+        if (splits.length > 0) {
+          for (const s of splits) {
+            await tx.budget.update({
+              where: { id: s.budgetId },
+              data: { spentAmount: { decrement: Number(s.amount) } },
+            });
+          }
+        } else if (existing.budgetId) {
           await tx.budget.update({
             where: { id: existing.budgetId },
             data: { spentAmount: { decrement: Number(existing.amount) } },
@@ -283,6 +410,7 @@ export class TransactionService {
         }
       }
 
+      // Deleting the Transaction row cascades to its TransactionSplit rows.
       await this.repo.delete(id, userId, tx);
     });
   }

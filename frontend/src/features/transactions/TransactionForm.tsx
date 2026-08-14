@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -11,7 +10,7 @@ import { api } from '@/services/api';
 import { Account } from '@/types';
 import { format } from 'date-fns';
 import { formatCurrency } from '@/utils/format';
-import { ArrowLeftRight } from 'lucide-react';
+import { BorrowBudgetModal } from './BorrowBudgetModal';
 
 interface Props {
   open: boolean;
@@ -20,7 +19,6 @@ interface Props {
 }
 
 export function TransactionForm({ open, onClose, transaction }: Props) {
-  const navigate = useNavigate();
   const { data: budgets = [] } = useBudgets();
   const { data: accounts = [] } = useQuery<Account[]>({
     queryKey: ['accounts'],
@@ -37,6 +35,7 @@ export function TransactionForm({ open, onClose, transaction }: Props) {
   );
   const [accountId, setAccountId] = useState(transaction?.accountId ?? '');
   const [budgetId, setBudgetId] = useState(transaction?.budgetId ?? '');
+  const [showBorrowModal, setShowBorrowModal] = useState(false);
 
   useEffect(() => {
     if (accounts.length > 0 && !accountId) {
@@ -58,31 +57,51 @@ export function TransactionForm({ open, onClose, transaction }: Props) {
     type === 'EXPENSE' && !!budgetId && enteredAmount > 0 && enteredAmount > effectiveRemaining;
   const shortfall = isBudgetInsufficient ? enteredAmount - effectiveRemaining : 0;
 
-  const handleGoToTransfers = () => {
-    onClose();
-    navigate('/transfers');
+  const buildData = (borrowFromBudgetId?: string) => ({
+    type,
+    amount: parseFloat(amount),
+    description,
+    date,
+    accountId,
+    budgetId: type === 'EXPENSE' && budgetId ? budgetId : undefined,
+    ...(borrowFromBudgetId ? { borrowFromBudgetId } : {}),
+  });
+
+  const submit = (borrowFromBudgetId?: string) => {
+    const data = buildData(borrowFromBudgetId);
+    return transaction ? update.mutateAsync({ id: transaction.id, ...data }) : create.mutateAsync(data);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const data = {
-      type,
-      amount: parseFloat(amount),
-      description,
-      date,
-      accountId,
-      budgetId: type === 'EXPENSE' && budgetId ? budgetId : undefined,
-    };
-
-    if (transaction) {
-      update.mutate({ id: transaction.id, ...data }, { onSuccess: onClose });
-    } else {
-      create.mutate(data, { onSuccess: onClose });
+    if (isBudgetInsufficient) {
+      setShowBorrowModal(true);
+      return;
+    }
+    try {
+      await submit();
+      onClose();
+    } catch {
+      // Error toast already shown by the mutation hook — keep the form open.
     }
   };
 
+  const handleBorrowConfirm = async (borrowFromBudgetId: string) => {
+    await submit(borrowFromBudgetId);
+    setShowBorrowModal(false);
+    onClose();
+  };
+
+  // While the borrow modal is open, Escape must close only that (its own
+  // handler), not this form underneath it — both listen on window, so this
+  // form's own Escape-close is disarmed for as long as the borrow modal is up.
+  const handleFormClose = () => {
+    if (showBorrowModal) return;
+    onClose();
+  };
+
   return (
-    <Modal open={open} onClose={onClose} title={transaction ? 'Edit Transaction' : 'Add Transaction'}>
+    <Modal open={open} onClose={handleFormClose} title={transaction ? 'Edit Transaction' : 'Add Transaction'}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Type toggle */}
         <div>
@@ -162,26 +181,13 @@ export function TransactionForm({ open, onClose, transaction }: Props) {
         )}
 
         {isBudgetInsufficient && (
-          <div className="rounded-xl border border-amber-400/40 bg-amber-50 dark:bg-amber-900/20 p-4 space-y-2">
+          <div className="rounded-xl border border-amber-400/40 bg-amber-50 dark:bg-amber-900/20 p-4 space-y-1">
             <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">
               งบ "{selectedBudget?.name}" ไม่เพียงพอ
             </p>
             <p className="text-xs text-amber-600 dark:text-amber-300">
-              เหลือ {formatCurrency(effectiveRemaining)} — ขาดอีก {formatCurrency(shortfall)}
+              เหลือ {formatCurrency(effectiveRemaining)} — ขาดอีก {formatCurrency(shortfall)} — กดบันทึกเพื่อเลือกยืมจากงบอื่น
             </p>
-            <p className="text-xs text-amber-600 dark:text-amber-300">
-              กรุณาโยกงบจากกลุ่มอื่นก่อนบันทึกรายการนี้
-            </p>
-            <button
-              type="button"
-              onClick={handleGoToTransfers}
-              className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-300
-                         underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100
-                         transition-colors"
-            >
-              <ArrowLeftRight className="w-3.5 h-3.5" />
-              ไปที่หน้าโยกงบ →
-            </button>
           </div>
         )}
 
@@ -191,12 +197,23 @@ export function TransactionForm({ open, onClose, transaction }: Props) {
             type="submit"
             className="flex-1"
             loading={create.isPending || update.isPending}
-            disabled={isBudgetInsufficient}
           >
             {transaction ? 'Save' : 'Add Transaction'}
           </Button>
         </div>
       </form>
+
+      {selectedBudget && (
+        <BorrowBudgetModal
+          open={showBorrowModal}
+          onClose={() => setShowBorrowModal(false)}
+          primaryBudget={selectedBudget}
+          amount={enteredAmount}
+          effectiveRemaining={effectiveRemaining}
+          budgets={budgets}
+          onConfirm={handleBorrowConfirm}
+        />
+      )}
     </Modal>
   );
 }

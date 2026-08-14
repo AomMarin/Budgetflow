@@ -7,6 +7,7 @@ export const createTransactionValidation = [
   body('type').isIn(['INCOME', 'EXPENSE']).withMessage('Type must be INCOME or EXPENSE'),
   body('description').trim().isLength({ min: 1, max: 200 }).withMessage('Description is required'),
   body('date').isISO8601().withMessage('Valid date is required'),
+  body('borrowFromBudgetId').optional({ nullable: true }).isString(),
 ];
 
 export const updateTransactionValidation = [
@@ -15,6 +16,7 @@ export const updateTransactionValidation = [
   body('type').optional().isIn(['INCOME', 'EXPENSE']),
   body('description').optional().trim().isLength({ min: 1, max: 200 }),
   body('date').optional().isISO8601(),
+  body('borrowFromBudgetId').optional({ nullable: true }).isString(),
 ];
 
 export const batchTransactionValidation = [

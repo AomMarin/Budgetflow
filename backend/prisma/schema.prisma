@@ -89,6 +89,7 @@ model Budget {
   importRules           ImportRule[]
   allocations           Allocation[]
   recurringTransactions RecurringTransaction[]
+  splits                TransactionSplit[]
 
   @@map("budgets")
 }
@@ -133,6 +134,8 @@ model Transaction {
   linkedTransaction   Transaction? @relation("TransactionLink", fields: [linkedTransactionId], references: [id], onDelete: SetNull)
   linkedBy            Transaction? @relation("TransactionLink")
 
+  splits TransactionSplit[]
+
   @@index([userId, date])
   @@index([userId, type])
   @@index([budgetId])
@@ -143,6 +146,26 @@ model Transaction {
 enum TransactionType {
   INCOME
   EXPENSE
+}
+
+// Populated ONLY when an EXPENSE "borrows" overflow from a second budget —
+// absent for the overwhelming majority of transactions, which stay fully
+// attributed to Transaction.budgetId as before. Presence of any row here for
+// a transactionId is the single signal that its spend crosses budgets; the
+// borrowed budget's own allocatedAmount is never touched, only spentAmount.
+model TransactionSplit {
+  id            String   @id @default(cuid())
+  transactionId String
+  budgetId      String
+  amount        Decimal  @db.Decimal(15, 2)
+  createdAt     DateTime @default(now())
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  budget      Budget      @relation(fields: [budgetId], references: [id], onDelete: Restrict)
+
+  @@unique([transactionId, budgetId])
+  @@index([budgetId])
+  @@map("transaction_splits")
 }
 
 model Transfer {

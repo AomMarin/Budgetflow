@@ -41,6 +41,16 @@ export interface Budget {
 
 export type TransactionType = 'INCOME' | 'EXPENSE';
 
+// Present only when an EXPENSE borrowed overflow from a second budget — see
+// backend TransactionSplit. Absent/empty for the overwhelming majority of
+// transactions, which stay fully attributed to Transaction.budgetId.
+export interface TransactionSplit {
+  id: string;
+  budgetId: string;
+  amount: number;
+  budget?: Pick<Budget, 'id' | 'name' | 'icon' | 'color'>;
+}
+
 export interface Transaction {
   id: string;
   userId: string;
@@ -53,6 +63,7 @@ export interface Transaction {
   isImported: boolean;
   createdAt: string;
   budget?: Pick<Budget, 'id' | 'name' | 'icon' | 'color'>;
+  splits?: TransactionSplit[];
 }
 
 export interface Transfer {

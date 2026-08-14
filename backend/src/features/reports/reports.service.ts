@@ -1,5 +1,6 @@
 import { prisma } from '../../config/database';
 import { BudgetService } from '../budgets/budget.service';
+import { getExpenseByBudget } from '../../utils/split-aware-spend';
 
 export class ReportsService {
   constructor(private readonly budgetService = new BudgetService()) {}
@@ -26,15 +27,8 @@ export class ReportsService {
     start: Date,
     end: Date,
   ): Promise<Record<string, number>> {
-    const rows = await prisma.transaction.groupBy({
-      by: ['budgetId'],
-      where: { userId, type: 'EXPENSE', date: { gte: start, lte: end } },
-      _sum: { amount: true },
-    });
-
-    return Object.fromEntries(
-      rows.filter((r) => r.budgetId).map((r) => [r.budgetId as string, Number(r._sum.amount ?? 0)]),
-    );
+    const byBudget = await getExpenseByBudget(userId, start, end);
+    return Object.fromEntries(Object.entries(byBudget).map(([budgetId, entry]) => [budgetId, entry.amount]));
   }
 
   async getMonthlyReport(userId: string, year: number, month: number) {
@@ -45,12 +39,7 @@ export class ReportsService {
       await Promise.all([
         this.getPeriodTotals(userId, startDate, endDate),
 
-        prisma.transaction.groupBy({
-          by: ['budgetId'],
-          where: { userId, type: 'EXPENSE', date: { gte: startDate, lte: endDate } },
-          _sum: { amount: true },
-          _count: true,
-        }),
+        getExpenseByBudget(userId, startDate, endDate),
 
         prisma.$queryRaw<{ day: number; total: number }[]>`
         SELECT EXTRACT(DAY FROM date)::int AS day, SUM(amount)::float AS total
@@ -70,12 +59,11 @@ export class ReportsService {
       ]);
 
     const budgetMap = Object.fromEntries(budgets.map((b) => [b.id, b]));
-    const budgetBreakdownWithNames = budgetBreakdown
-      .filter((b) => b.budgetId)
-      .map((b) => ({
-        budget: budgetMap[b.budgetId!] ?? { name: 'Uncategorized', icon: '❓', color: '#9CA3AF' },
-        amount: Number(b._sum.amount ?? 0),
-        count: b._count,
+    const budgetBreakdownWithNames = Object.entries(budgetBreakdown)
+      .map(([budgetId, entry]) => ({
+        budget: budgetMap[budgetId] ?? { name: 'Uncategorized', icon: '❓', color: '#9CA3AF' },
+        amount: entry.amount,
+        count: entry.count,
       }))
       .sort((a, b) => b.amount - a.amount);
 

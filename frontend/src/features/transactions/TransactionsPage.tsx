@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Search, Pencil, Trash2, Receipt, ListPlus } from 'lucide-react';
+import { Plus, Search, Pencil, Trash2, Receipt, ListPlus, ArrowLeftRight } from 'lucide-react';
 import { useTransactions, useDeleteTransaction } from '@/hooks/useTransactions';
 import { useBudgets } from '@/hooks/useBudgets';
 import { Transaction } from '@/types';
@@ -11,6 +11,22 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { TableRowSkeleton } from '@/components/ui/Skeleton';
 import { TransactionForm } from './TransactionForm';
 import { BatchTransactionModal } from './BatchTransactionModal';
+
+// Present only for the rare EXPENSE that borrowed overflow from a second
+// budget (see backend TransactionSplit) — null for the common case.
+function borrowTooltip(tx: Transaction): string | null {
+  const borrowSplit = tx.splits?.find((s) => s.budgetId !== tx.budgetId);
+  if (!borrowSplit) return null;
+  return `ยืมจาก "${borrowSplit.budget?.name ?? 'งบอื่น'}" ${formatCurrency(Number(borrowSplit.amount))}`;
+}
+
+function BorrowBadge({ tooltip }: { tooltip: string }) {
+  return (
+    <span title={tooltip} className="inline-flex items-center text-amber-500 dark:text-amber-400 shrink-0">
+      <ArrowLeftRight className="w-3 h-3" />
+    </span>
+  );
+}
 
 export function TransactionsPage() {
   const [editTx, setEditTx] = useState<Transaction | null>(null);
@@ -125,7 +141,13 @@ export function TransactionsPage() {
                   {tx.budget?.icon ?? '💳'}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{tx.description}</p>
+                  <p className="flex items-center gap-1.5 text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                    <span className="truncate">{tx.description}</span>
+                    {(() => {
+                      const tooltip = borrowTooltip(tx);
+                      return tooltip ? <BorrowBadge tooltip={tooltip} /> : null;
+                    })()}
+                  </p>
                   <p className="text-xs text-gray-400">
                     {formatDate(tx.date)}
                     {tx.budget && <> · {tx.budget.name}</>}
@@ -196,6 +218,10 @@ export function TransactionsPage() {
                       {tx.isImported && (
                         <Badge variant="info" className="text-[10px]">imported</Badge>
                       )}
+                      {(() => {
+                        const tooltip = borrowTooltip(tx);
+                        return tooltip ? <BorrowBadge tooltip={tooltip} /> : null;
+                      })()}
                     </div>
                   </td>
                   <td className="px-4 py-3">

@@ -1,4 +1,5 @@
 import { prisma } from '../../config/database';
+import { getExpenseByBudget } from '../../utils/split-aware-spend';
 
 export class DashboardService {
   async getSummary(userId: string) {
@@ -89,10 +90,10 @@ export class DashboardService {
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0, 23, 59, 59);
 
-    return prisma.transaction.groupBy({
-      by: ['budgetId'],
-      where: { userId, type: 'EXPENSE', date: { gte: startDate, lte: endDate }, budgetId: { not: null } },
-      _sum: { amount: true },
-    });
+    const byBudget = await getExpenseByBudget(userId, startDate, endDate);
+    return Object.entries(byBudget).map(([budgetId, entry]) => ({
+      budgetId,
+      _sum: { amount: entry.amount },
+    }));
   }
 }

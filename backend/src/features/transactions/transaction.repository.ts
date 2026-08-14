@@ -29,7 +29,10 @@ export class TransactionRepository {
     const [transactions, total] = await prisma.$transaction([
       prisma.transaction.findMany({
         where,
-        include: { budget: { select: { id: true, name: true, icon: true, color: true } } },
+        include: {
+          budget: { select: { id: true, name: true, icon: true, color: true } },
+          splits: { include: { budget: { select: { id: true, name: true, icon: true, color: true } } } },
+        },
         orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
         skip,
         take: limit,
@@ -46,6 +49,7 @@ export class TransactionRepository {
       include: {
         budget: { select: { id: true, name: true, icon: true, color: true } },
         account: { select: { id: true, name: true } },
+        splits: { include: { budget: { select: { id: true, name: true, icon: true, color: true } } } },
       },
     });
   }
@@ -57,11 +61,27 @@ export class TransactionRepository {
     });
   }
 
+  // Splits don't exist yet at create() time (created in a later statement in
+  // the same $transaction) — re-fetch with them included once the caller
+  // knows the transaction id, so the API response can show the borrow split.
+  async findByIdWithSplits(id: string, db: Db = prisma) {
+    return db.transaction.findUnique({
+      where: { id },
+      include: {
+        budget: { select: { id: true, name: true, icon: true, color: true } },
+        splits: { include: { budget: { select: { id: true, name: true, icon: true, color: true } } } },
+      },
+    });
+  }
+
   async update(id: string, userId: string, data: Prisma.TransactionUpdateInput, db: Db = prisma) {
     return db.transaction.update({
       where: { id, userId },
       data,
-      include: { budget: { select: { id: true, name: true, icon: true, color: true } } },
+      include: {
+        budget: { select: { id: true, name: true, icon: true, color: true } },
+        splits: { include: { budget: { select: { id: true, name: true, icon: true, color: true } } } },
+      },
     });
   }
 
