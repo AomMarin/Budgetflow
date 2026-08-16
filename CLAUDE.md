@@ -250,7 +250,7 @@ Auth routes (`/login`, `/register`) are guest-only; all others require auth via 
 - Household ยัง read-only อย่างเดียว — ยังไม่มี shared/pooled budget ที่แก้ไขร่วมกันได้จริง (เคยประเมินไว้ว่าเสี่ยง race condition + ต้องแก้ invariant ทั้งระบบ ถ้าจะทำต้องคุยเรื่อง scope ใหม่)
 - Notification เป็น in-app เท่านั้น ยังไม่มี email/push จริง (ไม่มี SMTP/VAPID credentials)
 - Cron รันครั้งเดียวต่อวันตาม timezone เดียว (Asia/Bangkok) ไม่ได้ปรับตาม `User.timezone` ของแต่ละคน
-- `recurring.service.ts`/`import.service.ts` ไม่ผ่าน `TransactionService` เลย (เขียน side-effect เอง) — **ไม่มี budget-insufficient check, ไม่ lock แถว** ต่างจาก `transaction.service.ts` create/update — เป็น gap เดิมตั้งแต่ก่อน Borrow feature ไม่ใช่ regression ใหม่ พึ่ง `notifyBudgetAlerts` แจ้งย้อนหลังแทน ยังไม่ตัดสินใจว่าจะให้ borrow เข้าถึง path นี้ด้วยไหม
+- `recurring.service.ts`/`import.service.ts` ไม่ผ่าน `TransactionService` เลย (เขียน side-effect เอง) — **ไม่มี budget-insufficient check, ไม่ lock แถว, และตอนนี้ข้าม closed-period guard ด้วย** (guard อยู่ใน `transaction.service.ts`/`pool.service.ts` เท่านั้น) เป็น gap เดิมตั้งแต่ก่อน Borrow feature ไม่ใช่ regression ใหม่ แต่ **ความเสี่ยงสูงขึ้นหลัง Phase 3** เพราะตอนนี้มี "เดือนปิดแล้ว" ที่ต้อง freeze จริงๆ ให้ recurring/import เขียนเข้าเดือนปิดได้เงียบๆ จะ corrupt `BudgetMonthlyHistory` ที่ freeze ไปแล้วโดยไม่มีใครรู้ — พึ่ง `notifyBudgetAlerts` แจ้งย้อนหลังแทน ยังไม่ตัดสินใจว่าจะให้ borrow + closed-period guard เข้าถึง path นี้ด้วยไหม
 - `batchCreate()` (transaction batch entry) ไม่รองรับ borrow — เกิน budget ใน batch row ยัง throw `BUDGET_INSUFFICIENT` เดิม (ตัดสินใจแล้วว่าตัด scope ตรงๆ เพราะ batch ไม่มี per-row UI ให้เลือก borrow source)
 - `budget.service.ts` `delete()` ไม่เรียก `lockUser` — ไม่อยู่ใน advisory-lock family เดียวกับ `create()`/`update()`/`closeAndAdvancePeriodsForUser()` (พบระหว่าง code review ก่อน deploy Phase 3, 2026-08-16) ถ้า user ลบ budget พร้อมกับที่ `closeAndAdvancePeriodsForUser()` กำลังประมวลผล budget นั้นพอดี (race แคบมาก) close จะ throw ตอนหา row ไม่เจอแล้ว rollback ทั้ง transaction — **fail-safe ไม่ corrupt ข้อมูล แค่ต้อง retry** เป็น reliability gap ไม่ใช่ money bug ตัดสินใจแล้วว่าไม่ต้องแก้ตอนนี้
 - Money math ทั้ง codebase ใช้ `Number(prisma.Decimal)` (JS float) ไม่ใช่ Decimal.js arithmetic ตรงๆ — ตรวจแล้วตอน review Phase 3 (2026-08-16) ว่าเป็น pattern เดิมทั่วทั้ง codebase ไม่ใช่สิ่งที่ Phase 3 เพิ่มเข้ามาใหม่ ปลอดภัยในทางปฏิบัติเพราะคอลัมน์ DB เป็น `Decimal(15,2)` ปัดเศษให้ตอนเขียนอยู่แล้ว (float error จากบวก/ลบเงิน 2 ทศนิยมเล็กกว่า rounding threshold มาก) ตัดสินใจไม่แก้ตอนนี้เพราะ scope ใหญ่เกินงานปัจจุบัน — **ถ้าวันไหนเจอปัญหาปัดเศษเงินจริง ให้เริ่มดูจากจุดนี้เป็นจุดแรก**
@@ -322,11 +322,11 @@ Archived budget: ข้ามอัตโนมัติฟรี ไม่ต�
 หากต้องการปรับปรุง ให้บันทึกรายการใหม่ในเดือนปัจจุบันแทน
 ```
 
-**Phasing**: Phase 3 = RESET+SWEEP+ROLLOVER logic ครบ (สูตรแก้แล้วทั้ง 3 ตัว จริงๆ ROLLOVER กลับง่ายกว่า RESET ตอนนี้ — RESET ต้องมี pool/2-pass/monthlyTarget field, ROLLOVER เป็น local operation ล้วน), UI เลือก `rolloverPolicy`: ตัวเลือก ROLLOVER **ไม่ disabled ไม่ซ่อน** เพราะ logic พร้อมใช้จริงตั้งแต่ Phase 3 แล้ว (ต่างจาก draft แรกที่วางแผนดอง ROLLOVER ไว้ Phase 4) — เฟสถัดไปที่เหลือจริงๆ คือ live-test บน production กับ edge case เพิ่มเติมถ้าเจอ ไม่ใช่ logic ที่ยังไม่มี.
+**Phasing (แก้ทิศทางระหว่าง implement, 2026-08-16)**: Phase 3 = RESET+SWEEP+ROLLOVER logic ครบ (สูตรแก้แล้วทั้ง 3 ตัว จริงๆ ROLLOVER กลับง่ายกว่า RESET ตอนนี้ — RESET ต้องมี pool/2-pass/monthlyTarget field, ROLLOVER เป็น local operation ล้วน) — **ย้อนกลับจากที่เขียนไว้ตอน design**: สุดท้ายตัดสินใจ **disable ROLLOVER ทั้ง UI (`BudgetForm.tsx` radio ใส่ `disabled` + tooltip "เร็วๆ นี้") และ backend (DTO/service reject 400)** แม้ logic ปิดเดือนจะรองรับ ROLLOVER ถูกต้องแล้วก็ตาม (ผ่าน test ครบ) — เก็บไว้เป็น Phase 4 เพื่อลด scope การเทส/ความเสี่ยงตอน deploy ครั้งแรก ไม่ใช่เพราะ logic ยังไม่พร้อม. เฟสถัดไป (Phase 4) คือแค่เปิดใช้ ROLLOVER ใน UI/backend (ลบ `disabled` + ลบ reject) ไม่ต้องแตะ logic ปิดเดือนอีกเลย.
 
-**Migration SQL** ร่างแรก (schema+enum+history table+index) อนุมัติแล้ว ณ ตอนตรวจทาน แต่ **ยังไม่ apply ที่ไหนทั้งสิ้น** — ต้องรวม `monthlyTarget` column เข้าไปในไฟล์เดียวกันก่อน (SQL ร่างแรกยังไม่มี field นี้ เกิดทีหลังตอนแก้ RESET) แล้วค่อย apply.
+**Migration SQL**: `20260816000000_add_monthly_reset_rollover` (schema+enum+history table+index, รวม `monthlyTarget` column แล้ว) — **apply ครบทั้ง dev/test local และ Neon production แล้ว** (2026-08-16).
 
-**Deploy strategy ที่ตกลง**: รัน `prisma migrate deploy` + backfill script ตรงกับ Neon (production DB) จากเครื่อง local ก่อน แล้วค่อย push โค้ดขึ้น — กันช่วงเวลาที่โค้ดใหม่รันแล้วแต่ schema/data ยังไม่พร้อม (production แสดงยอดผิดชั่วคราว).
+**Deploy strategy ที่ตกลงและทำตามจริง**: รัน `prisma migrate deploy` กับ Neon ก่อน (สำเร็จ, 21 budgets เข้าค่า default ถูกต้อง) → รัน backfill dry-run กับ Neon (0 changes, ไม่ต้องรัน `--write`) → push โค้ดขึ้น `origin/main` (commit `12b2a7f`) — ตามลำดับเดิมที่วางไว้ กันช่วงเวลาที่โค้ดใหม่รันแล้วแต่ schema/data ยังไม่พร้อม.
 
 **Backfill script** (`backend/scripts/backfill-period-spend.ts`, แยกจาก migration SQL): recompute `spentAmount` ทุก budget ให้เหลือเฉพาะยอดใช้จริงของเดือนปฏิทินปัจจุบัน (Bangkok) — เหตุผล: `spentAmount` เดิมสะสมตลอดกาลจริง (ยืนยันจาก comment `reports.service.ts` เดิม) ถ้าไม่ recompute ตอน stamp `periodYear/periodMonth = เดือนปัจจุบัน` ยอด remaining จะเพี้ยนทันทีทั้งเดือนแรกหลัง deploy. ใช้ `getExpenseByBudget()` จาก `split-aware-spend.ts` ตัวเดิม (จัดการ borrow-split ถูกต้องอยู่แล้ว) **ไม่เขียน join logic ซ้ำเป็น raw SQL** กัน bug จาก duplicate logic.
 
@@ -338,7 +338,25 @@ Archived budget: ข้ามอัตโนมัติฟรี ไม่ต�
 
 **ความเสี่ยงอื่นที่ระบุไว้แล้ว** (รายละเอียดเต็มอยู่ในบทสนทนา plan mode 2026-08-14, ไม่ทวนซ้ำที่นี่): deadlock risk จาก multi-budget lock (mitigate ด้วย `lockUser` advisory lock แบบเดียวกับที่ borrow feature ใช้แล้ว), test เดิมใน `budget.service.test.ts` ยัง valid เพราะ scalar ทำงานแบบเดิมภายใน 1 period.
 
-**สถานะ (อัปเดต 2026-08-16)**: เขียนโค้ดครบตาม design นี้แล้ว — schema+migration (`20260816000000_add_monthly_reset_rollover`, apply แล้วที่ dev+test local, **ยัง apply Neon prod ไม่ได้**), `BudgetService.closeAndAdvancePeriodsForUser()` (2-pass, lockUser, month-major catch-up), `backend/scripts/backfill-period-spend.ts` (dry-run default + DB-name guard + epsilon-safe diff), closed-period guard บน transaction create/update/delete/batchCreate + `pool.service.ts reverseContribution()`, test ครบ (`assertZeroBasedInvariant` helper + ครอบ RESET/ROLLOVER/SWEEP/idempotency/multi-month/concurrency/closed-period), UI (`BudgetForm.tsx` radio group + monthlyTarget field, badge บน `BudgetCard.tsx`, ROLLOVER disabled ทั้ง frontend+backend) — ผ่าน code review ละเอียดก่อน deploy แล้ว (เจอ+แก้ 1 บั๊กจริงใน backfill script, ดู known gaps ด้านบนอีก 2 ข้อที่ตัดสินใจไม่แก้ตอนนี้) เหลือ: apply migration+backfill กับ Neon ตาม deploy strategy ด้านบน แล้วค่อย push โค้ด.
+**สถานะ (อัปเดต 2026-08-16 ปลาย session)**: เขียนโค้ดครบตาม design นี้แล้ว, commit `12b2a7f` — **push ขึ้น `origin/main` แล้ว** (`git log origin/main..HEAD` ว่าง, ยืนยันหลัง fetch). Migration `20260816000000_add_monthly_reset_rollover` **apply กับ Neon production สำเร็จแล้ว** — ตรวจแล้ว 21 budgets ทุกตัวเข้า `rolloverPolicy=RESET` (default), `periodYear/periodMonth=2026/8`, `monthlyTarget=null` ตรงตามที่คาดหลัง migration (ยังไม่มีใครตั้งค่าเอง). Backfill script รัน dry-run กับ Neon แล้ว: **0 changes, 21/21 already correct** — `spentAmount` เดิมของทุก budget ตรงกับยอดใช้จริงเดือนปัจจุบันอยู่แล้ว (เดือนแรกหลัง deploy ไม่มี transaction เก่าข้ามเดือนมาปน) จึง **ไม่ต้องรัน `--write`** เลย.
+
+**ยังไม่ได้ทดสอบบน production จริง** (ทดสอบแค่ local dev browser ก่อนหน้านี้) — session หน้าต้องเทสบน production ให้ครบก่อนถือว่า Phase 3 เสร็จจริง:
+1. badge policy บน budget card ขึ้นถูกต้อง (`🔄 รีเซ็ตรายเดือน` เป็นต้น)
+2. ROLLOVER radio ใน `BudgetForm.tsx` disabled กดไม่ติดจริงบน production build (ไม่ใช่แค่ dev server)
+3. `monthlyTarget` field โผล่เมื่อเลือก RESET เท่านั้น ซ่อนถูกต้องเมื่อสลับ policy อื่น
+4. **สำคัญสุด**: บันทึก transaction ปกติ (วันที่ปัจจุบัน, ไม่ backdate) ต้อง**ไม่**โดน closed-period guard บล็อก — เพราะ guard เพิ่งเขียนใหม่ ยังไม่เคยเจอ production data/traffic จริง ถ้าพลาดจะบล็อกผู้ใช้จริงบันทึกรายการไม่ได้เลย
+5. mobile viewport จริง (390px) — ค้างมาตั้งแต่ Phase 2 (`BorrowBudgetModal`/split detail line) ยังไม่เคยเห็นด้วยตาบน production เช่นกัน ควรเทสพร้อมกันคราวเดียว
+
+### Phase 5 — ตั้งวันรีเซ็ตเอง (บันทึกไว้ 2026-08-16, ยังไม่เริ่มออกแบบ)
+
+ตอนนี้ปิดเดือนตามปฏิทิน (วันที่ 1) เท่านั้น อยากให้ผู้ใช้ตั้งวันตัดรอบเองได้ (เช่น ทุกวันที่ 25 ตามวันเงินเดือนออก) — ยังไม่ได้ออกแบบเลย แค่บันทึกประเด็นที่ต้องคิดตอนเริ่มออกแบบจริง:
+
+- `periodYear`/`periodMonth` ปัจจุบันคือ (ปี, เดือน) ล้วนๆ ผูกกับปฏิทิน ถ้าวันตัดไม่ใช่วันที่ 1 โครงนี้ยังพอใช้ได้ไหม หรือต้องเปลี่ยนเป็น `periodStartDate` (DateTime) แทน — กระทบทุกจุดที่อ่าน periodYear/Month ตรงๆ (`closeAndAdvancePeriodsForUser`, closed-period guard, backfill script)
+- ตั้งค่าระดับ user เดียวทั้งบัญชี หรือตั้งได้ต่อ budget (ถ้าต่อ budget แปลว่าแต่ละ budget ปิดคนละวันกันได้ — pool ของ RESET ที่แชร์ข้าม budget จะซับซ้อนขึ้นทันที เพราะ budget ที่ปิดวันต่างกันไม่ได้ "ปิดพร้อมกัน" อีกต่อไป)
+- คนตั้งวันที่ 31 แล้วเดือนที่ไม่มีวันนั้น (ก.พ., เม.ย., มิ.ย., ก.ย., พ.ย.) จะ fallback ยังไง — ปกติ pattern ทั่วไปคือ clamp ไปวันสุดท้ายของเดือนนั้น แต่ต้องตัดสินใจชัดแล้วเขียน test เคสนี้ไว้
+- transaction ที่ลงวันที่ระหว่างวันตัดกับสิ้นเดือนปฏิทิน นับเข้า period ไหน (period ของเดือนก่อนหน้าหรือเดือนถัดไป) ต้องนิยามให้ชัดก่อนแตะโค้ด
+- เกณฑ์ closed-period guard (`assertBudgetsPeriodOpen` ใน `utils/period-guard.ts`) เทียบ `getBangkokYearMonth(date)` กับ `periodYear/periodMonth` ตรงๆ อยู่ตอนนี้ — ถ้าเปลี่ยนเป็นวันตัดเอง ต้องเปลี่ยนเป็นเทียบกับ `periodStartDate`/`periodEndDate` แทน กระทบทุกจุดที่เรียก guard นี้ (transaction create/update/delete/batchCreate, pool reverseContribution)
+- ข้อมูลเดิมที่ปิดไปแล้วด้วยเกณฑ์ปฏิทิน (Phase 3, `BudgetMonthlyHistory` ที่มี `year`/`month` ล้วน) จะ migrate เข้า scheme ใหม่ยังไงถ้าเปลี่ยนโครง — หรือปล่อยของเก่าไว้เป็น legacy แล้วเริ่ม column ใหม่คู่ขนาน
 
 ### Environment ที่ต้องเตรียมก่อนเริ่ม Phase 3
 
