@@ -5,8 +5,8 @@ import { CreateBudgetDto, UpdateBudgetDto } from './budget.dto';
 type Db = Prisma.TransactionClient | typeof prisma;
 
 export class BudgetRepository {
-  async findAll(userId: string): Promise<Budget[]> {
-    return prisma.budget.findMany({
+  async findAll(userId: string, db: Db = prisma): Promise<Budget[]> {
+    return db.budget.findMany({
       where: { userId, isArchived: false },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     });

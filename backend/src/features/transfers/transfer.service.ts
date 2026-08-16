@@ -9,6 +9,15 @@ export interface CreateTransferDto {
 }
 
 export class TransferService {
+  // No closed-period guard here, unlike transaction.service.ts / pool.service.ts
+  // reverseContribution(). Both conditions that make the guard necessary are
+  // absent for transfers: (1) CreateTransferDto has no `date` — a transfer
+  // always acts at "now", so it can never backdate into a closed month, and
+  // (2) it only moves allocatedAmount between budgets, never spentAmount —
+  // spentAmount is the field a closed month's BudgetMonthlyHistory freezes.
+  // If either changes (a `date` field is added, or transfers start touching
+  // spentAmount) this reasoning breaks and the guard needs to be added — see
+  // assertBudgetsPeriodOpen in utils/period-guard.ts.
   async create(userId: string, dto: CreateTransferDto) {
     if (dto.fromBudgetId === dto.toBudgetId) {
       throw Object.assign(new Error('Cannot transfer to the same budget'), { status: 400 });

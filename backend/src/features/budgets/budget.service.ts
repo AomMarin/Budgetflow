@@ -1,7 +1,13 @@
-import { Budget, Prisma } from '@prisma/client';
+import { Budget, Prisma, RolloverPolicy } from '@prisma/client';
 import { BudgetRepository } from './budget.repository';
 import { CreateBudgetDto, UpdateBudgetDto, AllocateIncomeDto } from './budget.dto';
 import { prisma } from '../../config/database';
+import { getBangkokYearMonth, nextYearMonth, isBeforeYearMonth, YearMonth } from '../../utils/period';
+import { logger } from '../../utils/logger';
+
+function periodOf(budget: Budget): YearMonth {
+  return { year: budget.periodYear, month: budget.periodMonth };
+}
 
 export interface BudgetWithStats extends Budget {
   remainingAmount: number;
@@ -43,7 +49,16 @@ export class BudgetService {
     return Number(result._sum.balance ?? 0);
   }
 
+  private assertRolloverPolicySupported(policy: RolloverPolicy | undefined): void {
+    if (policy === RolloverPolicy.ROLLOVER) {
+      throw Object.assign(new Error('ยังไม่เปิดใช้งาน Rollover ในตอนนี้ กรุณาเลือก Reset หรือ Sweep'), {
+        status: 400,
+      });
+    }
+  }
+
   async create(userId: string, dto: CreateBudgetDto): Promise<BudgetWithStats> {
+    this.assertRolloverPolicySupported(dto.rolloverPolicy);
     const budget = await prisma.$transaction(async (tx) => {
       await this.lockUser(tx, userId);
 
@@ -70,6 +85,7 @@ export class BudgetService {
   }
 
   async update(id: string, userId: string, dto: UpdateBudgetDto): Promise<BudgetWithStats> {
+    this.assertRolloverPolicySupported(dto.rolloverPolicy);
     const budget = await prisma.$transaction(async (tx) => {
       await this.lockUser(tx, userId);
 
@@ -226,6 +242,135 @@ export class BudgetService {
     }
 
     return triggered;
+  }
+
+  // Closes every calendar month a user's budgets have fallen behind on, up to
+  // `now` (Asia/Bangkok), advancing periodYear/periodMonth as it goes. Called
+  // from both the daily cron and lazily before any budget read, so it must be
+  // a cheap no-op once every budget's period already matches the current one.
+  //
+  // Runs as ONE transaction per user, under lockUser — RESET budgets in pass 2
+  // draw from a pool shared across the whole user's budgets, so two closes
+  // (cron + a lazy hook) racing for the same pool would double-spend it
+  // without this lock, same hazard as create()/update() above.
+  //
+  // Processing is month-major: for each calendar month still owed, pass 1
+  // closes every SWEEP/ROLLOVER budget first (purely local, never touches the
+  // pool — SWEEP frees pool room, ROLLOVER leaves it unchanged), then pass 2
+  // closes RESET budgets in sortOrder, re-querying the pool fresh (via the
+  // same tx, so it sees every write already committed in this call) before
+  // each one — first-come-first-served if the pool runs out mid-pass.
+  async closeAndAdvancePeriodsForUser(userId: string, now: Date = new Date()): Promise<void> {
+    const current = getBangkokYearMonth(now);
+
+    await prisma.$transaction(
+      async (tx) => {
+        await this.lockUser(tx, userId);
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const budgets = await this.repo.findAll(userId, tx);
+          const behind = budgets.filter((b) => isBeforeYearMonth(periodOf(b), current));
+          if (behind.length === 0) break;
+
+          for (const budget of behind) {
+            if (budget.rolloverPolicy === RolloverPolicy.RESET) continue;
+            await this.closeLocalBudgetMonth(tx, budget);
+          }
+
+          const resetBehind = behind
+            .filter((b) => b.rolloverPolicy === RolloverPolicy.RESET)
+            .sort((a, b) => a.sortOrder - b.sortOrder);
+          for (const stub of resetBehind) {
+            await this.closeResetBudgetMonth(tx, userId, stub.id);
+          }
+        }
+      },
+      { timeout: 30000 },
+    );
+  }
+
+  // SWEEP / ROLLOVER: purely local to this budget, no pool involved.
+  private async closeLocalBudgetMonth(tx: Prisma.TransactionClient, budget: Budget): Promise<void> {
+    const oldAllocated = Number(budget.allocatedAmount);
+    const oldSpent = Number(budget.spentAmount);
+    const newAllocated =
+      budget.rolloverPolicy === RolloverPolicy.ROLLOVER ? Math.max(oldAllocated - oldSpent, 0) : 0;
+
+    await this.commitMonthClose(tx, budget, oldAllocated, oldSpent, newAllocated);
+  }
+
+  // RESET: draws from the pool shared across the user's whole budget set.
+  // Re-fetches the budget and the pool fresh inside tx — must not reuse the
+  // stale `behind` snapshot from the caller's loop, since prior budgets
+  // closed earlier in this same pass already changed both.
+  private async closeResetBudgetMonth(tx: Prisma.TransactionClient, userId: string, budgetId: string): Promise<void> {
+    const budget = await tx.budget.findUniqueOrThrow({ where: { id: budgetId } });
+    const oldAllocated = Number(budget.allocatedAmount);
+    const oldSpent = Number(budget.spentAmount);
+    const oldRemaining = Math.max(oldAllocated - oldSpent, 0);
+
+    const [{ totalRemaining }, totalBalance] = await Promise.all([
+      this.repo.getAllocationTotals(userId, tx),
+      this.getTotalBalance(userId, tx),
+    ]);
+    const pool = totalBalance - totalRemaining;
+    // A negative pool means Sigma(remaining) already exceeds balance BEFORE
+    // this budget's close — the zero-based invariant was already broken by
+    // something upstream of Phase 3 (legacy data, a race, a manual DB edit).
+    // Clamping below silently no-ops the top-up so this never makes the
+    // violation worse, but it also can't fix it — log it so a negative pool
+    // doesn't pass by unnoticed.
+    if (pool < 0) {
+      logger.warn(
+        `RESET close for budget ${budget.id} (user ${userId}) found a negative pool ` +
+          `(balance=${totalBalance.toFixed(2)}, totalRemaining=${totalRemaining.toFixed(2)}, pool=${pool.toFixed(2)}) — ` +
+          `zero-based invariant was already violated before this close ran.`,
+      );
+    }
+
+    const target = budget.monthlyTarget !== null ? Number(budget.monthlyTarget) : oldAllocated;
+    const topup = Math.min(Math.max(target - oldRemaining, 0), Math.max(pool, 0));
+    const newAllocated = oldRemaining + topup;
+
+    await this.commitMonthClose(tx, budget, oldAllocated, oldSpent, newAllocated);
+  }
+
+  private async commitMonthClose(
+    tx: Prisma.TransactionClient,
+    budget: Budget,
+    oldAllocated: number,
+    oldSpent: number,
+    newAllocated: number,
+  ): Promise<void> {
+    const closedPeriod = periodOf(budget);
+    const next = nextYearMonth(closedPeriod);
+
+    await tx.budget.update({
+      where: { id: budget.id },
+      data: {
+        allocatedAmount: newAllocated,
+        spentAmount: 0,
+        periodYear: next.year,
+        periodMonth: next.month,
+      },
+    });
+
+    await tx.budgetMonthlyHistory.upsert({
+      where: {
+        budgetId_year_month: { budgetId: budget.id, year: closedPeriod.year, month: closedPeriod.month },
+      },
+      create: {
+        budgetId: budget.id,
+        userId: budget.userId,
+        year: closedPeriod.year,
+        month: closedPeriod.month,
+        allocatedAmount: oldAllocated,
+        spentAmount: oldSpent,
+        rolloverPolicy: budget.rolloverPolicy,
+      },
+      update: {},
+    });
   }
 
   private addStats(budget: Budget): BudgetWithStats {

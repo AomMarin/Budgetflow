@@ -252,10 +252,12 @@ Auth routes (`/login`, `/register`) are guest-only; all others require auth via 
 - Cron รันครั้งเดียวต่อวันตาม timezone เดียว (Asia/Bangkok) ไม่ได้ปรับตาม `User.timezone` ของแต่ละคน
 - `recurring.service.ts`/`import.service.ts` ไม่ผ่าน `TransactionService` เลย (เขียน side-effect เอง) — **ไม่มี budget-insufficient check, ไม่ lock แถว** ต่างจาก `transaction.service.ts` create/update — เป็น gap เดิมตั้งแต่ก่อน Borrow feature ไม่ใช่ regression ใหม่ พึ่ง `notifyBudgetAlerts` แจ้งย้อนหลังแทน ยังไม่ตัดสินใจว่าจะให้ borrow เข้าถึง path นี้ด้วยไหม
 - `batchCreate()` (transaction batch entry) ไม่รองรับ borrow — เกิน budget ใน batch row ยัง throw `BUDGET_INSUFFICIENT` เดิม (ตัดสินใจแล้วว่าตัด scope ตรงๆ เพราะ batch ไม่มี per-row UI ให้เลือก borrow source)
+- `budget.service.ts` `delete()` ไม่เรียก `lockUser` — ไม่อยู่ใน advisory-lock family เดียวกับ `create()`/`update()`/`closeAndAdvancePeriodsForUser()` (พบระหว่าง code review ก่อน deploy Phase 3, 2026-08-16) ถ้า user ลบ budget พร้อมกับที่ `closeAndAdvancePeriodsForUser()` กำลังประมวลผล budget นั้นพอดี (race แคบมาก) close จะ throw ตอนหา row ไม่เจอแล้ว rollback ทั้ง transaction — **fail-safe ไม่ corrupt ข้อมูล แค่ต้อง retry** เป็น reliability gap ไม่ใช่ money bug ตัดสินใจแล้วว่าไม่ต้องแก้ตอนนี้
+- Money math ทั้ง codebase ใช้ `Number(prisma.Decimal)` (JS float) ไม่ใช่ Decimal.js arithmetic ตรงๆ — ตรวจแล้วตอน review Phase 3 (2026-08-16) ว่าเป็น pattern เดิมทั่วทั้ง codebase ไม่ใช่สิ่งที่ Phase 3 เพิ่มเข้ามาใหม่ ปลอดภัยในทางปฏิบัติเพราะคอลัมน์ DB เป็น `Decimal(15,2)` ปัดเศษให้ตอนเขียนอยู่แล้ว (float error จากบวก/ลบเงิน 2 ทศนิยมเล็กกว่า rounding threshold มาก) ตัดสินใจไม่แก้ตอนนี้เพราะ scope ใหญ่เกินงานปัจจุบัน — **ถ้าวันไหนเจอปัญหาปัดเศษเงินจริง ให้เริ่มดูจากจุดนี้เป็นจุดแรก**
 
-### Monthly Reset + Borrow-from-budget — แผนงาน Phase 3/4 (ยังไม่เริ่มเขียนโค้ด)
+### Monthly Reset + Borrow-from-budget — แผนงาน Phase 3/4 (โค้ดเขียนแล้ว, ยัง apply Neon ไม่ได้)
 
-Design doc ร่างแรกทำไว้ตอน plan mode วันที่ 2026-08-14 แล้วพบว่า **RESET/ROLLOVER เดิมละเมิด zero-based invariant** ระหว่าง session ตรวจทานถัดมา (2026-08-14 เช่นกัน) แก้ design ใหม่ทั้งคู่แล้ว — เวอร์ชันนี้คือ design ที่ยืนยันแล้ว, สรุปไว้ที่นี่ให้ self-contained ยังไม่ได้เขียนโค้ดจริงสักบรรทัด.
+Design doc ร่างแรกทำไว้ตอน plan mode วันที่ 2026-08-14 แล้วพบว่า **RESET/ROLLOVER เดิมละเมิด zero-based invariant** ระหว่าง session ตรวจทานถัดมา (2026-08-14 เช่นกัน) แก้ design ใหม่ทั้งคู่แล้ว — เวอร์ชันนี้คือ design ที่ยืนยันแล้ว, สรุปไว้ที่นี่ให้ self-contained. Session ถัดมา (2026-08-16) เขียนโค้ดครบตาม design นี้แล้วทั้งหมด (ดู **สถานะ** ท้ายหัวข้อนี้) — เนื้อหา design ด้านล่างยังคงถูกต้อง อ่านเป็น reference ของสิ่งที่ implement ไปแล้วได้เลย ไม่ใช่แผนที่ยังไม่เริ่ม.
 
 **บั๊กที่เจอ (เหตุผลที่ design เดิมถูกทิ้ง)**: `spentAmount` หักออกจาก `Account.balance` ถาวรตอน expense เกิด เงินไม่มีทางย้อนคืนได้แค่ zero counter — ตัวอย่างตัวเลขจริงที่จับได้ (balance 8,400 / allocated 10,000 / spent 3,300, remaining เดิม 6,700 ≤ balance ✓):
 - RESET เดิม (spent=0, allocated ไม่แตะ) → remaining ใหม่ 10,000 > balance 8,400 ✗ เสกเงิน 1,600
@@ -336,7 +338,7 @@ Archived budget: ข้ามอัตโนมัติฟรี ไม่ต�
 
 **ความเสี่ยงอื่นที่ระบุไว้แล้ว** (รายละเอียดเต็มอยู่ในบทสนทนา plan mode 2026-08-14, ไม่ทวนซ้ำที่นี่): deadlock risk จาก multi-budget lock (mitigate ด้วย `lockUser` advisory lock แบบเดียวกับที่ borrow feature ใช้แล้ว), test เดิมใน `budget.service.test.ts` ยัง valid เพราะ scalar ทำงานแบบเดิมภายใน 1 period.
 
-**สถานะ**: ยังไม่ได้เขียนโค้ดสักบรรทัด — session หน้าเริ่มจาก confirm schema+migration SQL ฉบับเต็ม (รวม `monthlyTarget` + index ที่แก้แล้ว) ก่อนแตะโค้ดจริง.
+**สถานะ (อัปเดต 2026-08-16)**: เขียนโค้ดครบตาม design นี้แล้ว — schema+migration (`20260816000000_add_monthly_reset_rollover`, apply แล้วที่ dev+test local, **ยัง apply Neon prod ไม่ได้**), `BudgetService.closeAndAdvancePeriodsForUser()` (2-pass, lockUser, month-major catch-up), `backend/scripts/backfill-period-spend.ts` (dry-run default + DB-name guard + epsilon-safe diff), closed-period guard บน transaction create/update/delete/batchCreate + `pool.service.ts reverseContribution()`, test ครบ (`assertZeroBasedInvariant` helper + ครอบ RESET/ROLLOVER/SWEEP/idempotency/multi-month/concurrency/closed-period), UI (`BudgetForm.tsx` radio group + monthlyTarget field, badge บน `BudgetCard.tsx`, ROLLOVER disabled ทั้ง frontend+backend) — ผ่าน code review ละเอียดก่อน deploy แล้ว (เจอ+แก้ 1 บั๊กจริงใน backfill script, ดู known gaps ด้านบนอีก 2 ข้อที่ตัดสินใจไม่แก้ตอนนี้) เหลือ: apply migration+backfill กับ Neon ตาม deploy strategy ด้านบน แล้วค่อย push โค้ด.
 
 ### Environment ที่ต้องเตรียมก่อนเริ่ม Phase 3
 

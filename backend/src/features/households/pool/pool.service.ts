@@ -9,6 +9,7 @@ import { TransactionFilters } from '../../transactions/transaction.dto';
 import { CreateBudgetDto, UpdateBudgetDto } from '../../budgets/budget.dto';
 import { PoolRepository } from './pool.repository';
 import { ContributeDto, SpendDto, UpdatePoolTransactionDto } from './pool.dto';
+import { assertBudgetsPeriodOpen } from '../../../utils/period-guard';
 
 export class PoolService {
   constructor(
@@ -243,6 +244,14 @@ export class PoolService {
     }
 
     await prisma.$transaction(async (tx) => {
+      // contribute() bypasses TransactionService and decrements spentAmount
+      // directly (see below), same as delete() there — so it needs the same
+      // closed-period guard: reversing a contribution whose month has since
+      // been closed would corrupt that month's frozen BudgetMonthlyHistory.
+      if (memberTx.budgetId) {
+        await assertBudgetsPeriodOpen(tx, [memberTx.budgetId], memberTx.date);
+      }
+
       await tx.account.update({
         where: { id: poolTx.accountId },
         data: { balance: { decrement: Number(poolTx.amount) } },

@@ -4,6 +4,8 @@ import { CreateTransactionDto, UpdateTransactionDto, TransactionFilters } from '
 import { BudgetRepository } from '../budgets/budget.repository';
 import { prisma } from '../../config/database';
 import { buildPaginationMeta } from '../../utils/response';
+import { getBangkokYearMonth, isBeforeYearMonth } from '../../utils/period';
+import { assertBudgetsPeriodOpen, closedPeriodError } from '../../utils/period-guard';
 
 type BudgetLockRow = { id: string; name: string; allocatedAmount: string; spentAmount: string };
 type Split = { budgetId: string; amount: number };
@@ -131,6 +133,8 @@ export class TransactionService {
           dto.borrowFromBudgetId,
           new Map(),
         );
+        const affectedBudgetIds = splits.length > 0 ? splits.map((s) => s.budgetId) : [dto.budgetId];
+        await assertBudgetsPeriodOpen(tx, affectedBudgetIds, new Date(dto.date));
       } else if (dto.budgetId) {
         // Non-EXPENSE with a budget: keep the existing lock-but-don't-check
         // behavior unchanged.
@@ -231,6 +235,29 @@ export class TransactionService {
         await this.lockBudgetRow(tx, userId, newBudgetId);
       }
 
+      // Symmetric closed-period guard: block touching a transaction whose OLD
+      // effect already lives in a closed month (editing history), and block
+      // moving it INTO a closed month (backdating into history) — same rule,
+      // checked from both directions.
+      const oldAffectedBudgetIds =
+        existing.type === 'EXPENSE'
+          ? existingSplits.length > 0
+            ? existingSplits.map((s) => s.budgetId)
+            : existing.budgetId
+              ? [existing.budgetId]
+              : []
+          : [];
+      await assertBudgetsPeriodOpen(tx, oldAffectedBudgetIds, new Date(existing.date));
+
+      const newAffectedBudgetIds =
+        newType === 'EXPENSE' && newBudgetId
+          ? newSplits.length > 0
+            ? newSplits.map((s) => s.budgetId)
+            : [newBudgetId]
+          : [];
+      const newDate = dto.date !== undefined ? new Date(dto.date) : new Date(existing.date);
+      await assertBudgetsPeriodOpen(tx, newAffectedBudgetIds, newDate);
+
       // Reverse old effects
       if (existing.type === 'INCOME') {
         await tx.account.update({
@@ -310,19 +337,28 @@ export class TransactionService {
       if (!account) throw Object.assign(new Error(`Account ${accountId} not found`), { status: 404 });
     }
     const budgetIds = [...new Set(items.map((i) => i.budgetId).filter(Boolean) as string[])];
-    const budgetRemaining = new Map<string, { name: string; remaining: number }>();
+    const budgetRemaining = new Map<
+      string,
+      { name: string; remaining: number; periodYear: number; periodMonth: number }
+    >();
     for (const budgetId of budgetIds) {
       const budget = await this.budgetRepo.findById(budgetId, userId);
       if (!budget) throw Object.assign(new Error(`Budget ${budgetId} not found`), { status: 404 });
       budgetRemaining.set(budgetId, {
         name: budget.name,
         remaining: Number(budget.allocatedAmount) - Number(budget.spentAmount),
+        periodYear: budget.periodYear,
+        periodMonth: budget.periodMonth,
       });
     }
 
     for (const dto of items) {
       if (dto.type === 'EXPENSE' && dto.budgetId) {
         const entry = budgetRemaining.get(dto.budgetId)!;
+        const txPeriod = getBangkokYearMonth(new Date(dto.date));
+        if (isBeforeYearMonth(txPeriod, { year: entry.periodYear, month: entry.periodMonth })) {
+          throw closedPeriodError();
+        }
         if (dto.amount > entry.remaining) {
           throw Object.assign(
             new Error(
@@ -385,6 +421,16 @@ export class TransactionService {
     const splits = await prisma.transactionSplit.findMany({ where: { transactionId: id } });
 
     await prisma.$transaction(async (tx) => {
+      const affectedBudgetIds =
+        existing.type === 'EXPENSE'
+          ? splits.length > 0
+            ? splits.map((s) => s.budgetId)
+            : existing.budgetId
+              ? [existing.budgetId]
+              : []
+          : [];
+      await assertBudgetsPeriodOpen(tx, affectedBudgetIds, new Date(existing.date));
+
       if (existing.type === 'INCOME') {
         await tx.account.update({
           where: { id: existing.accountId },

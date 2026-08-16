@@ -5,6 +5,12 @@ import { formatCurrency, formatPercent } from '@/utils/format';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { Badge } from '@/components/ui/Badge';
 
+const POLICY_BADGE: Record<Budget['rolloverPolicy'], string> = {
+  RESET: '🔄 รีเซ็ตรายเดือน',
+  SWEEP: '🧹 คืนกองกลาง',
+  ROLLOVER: '⏭️ ยกยอด',
+};
+
 export function BudgetCard({
   budget,
   onEdit,
@@ -50,9 +56,12 @@ export function BudgetCard({
             <h3 className="font-semibold text-gray-900 dark:text-white leading-tight">
               {budget.name}
             </h3>
-            <Badge variant={alertVariant} className="mt-1">
-              {formatPercent(budget.usagePercent)} ใช้แล้ว
-            </Badge>
+            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+              <Badge variant={alertVariant}>
+                {formatPercent(budget.usagePercent)} ใช้แล้ว
+              </Badge>
+              <Badge variant="default">{POLICY_BADGE[budget.rolloverPolicy]}</Badge>
+            </div>
           </div>
         </div>
 

@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
+import { RolloverPolicy } from '@prisma/client';
 import { BudgetService } from '../budget.service';
 import { prisma } from '../../../config/database';
 import { createTestUser, cleanupTestUser, TestUserContext } from '../../../test/helpers';
@@ -75,6 +76,58 @@ describe('BudgetService — zero-based invariant', () => {
       allocatedAmount: 500,
     });
     expect(Number(transport.allocatedAmount)).toBe(500);
+  });
+});
+
+describe('BudgetService — rolloverPolicy ROLLOVER not yet supported', () => {
+  let ctx: TestUserContext;
+  const service = new BudgetService();
+
+  beforeEach(async () => {
+    ctx = await createTestUser(1000);
+  });
+
+  afterEach(async () => {
+    await cleanupTestUser(ctx.userId);
+  });
+
+  it('rejects creating a budget with rolloverPolicy: ROLLOVER', async () => {
+    await expect(
+      service.create(ctx.userId, {
+        name: 'Food',
+        icon: '🍔',
+        color: '#3B82F6',
+        allocatedAmount: 500,
+        rolloverPolicy: RolloverPolicy.ROLLOVER,
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('rejects updating a budget to rolloverPolicy: ROLLOVER', async () => {
+    const food = await service.create(ctx.userId, {
+      name: 'Food',
+      icon: '🍔',
+      color: '#3B82F6',
+      allocatedAmount: 500,
+    });
+
+    await expect(
+      service.update(food.id, ctx.userId, { rolloverPolicy: RolloverPolicy.ROLLOVER }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('still allows RESET and SWEEP', async () => {
+    const food = await service.create(ctx.userId, {
+      name: 'Food',
+      icon: '🍔',
+      color: '#3B82F6',
+      allocatedAmount: 500,
+      rolloverPolicy: RolloverPolicy.SWEEP,
+    });
+    expect(food.rolloverPolicy).toBe(RolloverPolicy.SWEEP);
+
+    const updated = await service.update(food.id, ctx.userId, { rolloverPolicy: RolloverPolicy.RESET });
+    expect(updated.rolloverPolicy).toBe(RolloverPolicy.RESET);
   });
 });
 

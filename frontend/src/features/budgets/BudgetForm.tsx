@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Budget } from '@/types';
+import { Budget, RolloverPolicy } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -9,6 +9,27 @@ import { api } from '@/services/api';
 import { Account } from '@/types';
 import { formatCurrency } from '@/utils/format';
 import { calculateAllocationTotals } from '@/utils/allocation';
+import { shouldShowMonthlyTargetField, isMonthlyTargetInvalid, resolveMonthlyTarget } from '@/utils/budgetForm';
+import { cn } from '@/utils/cn';
+
+const POLICY_OPTIONS: { value: RolloverPolicy; label: string; description: string; disabled?: boolean }[] = [
+  {
+    value: 'RESET',
+    label: 'เริ่มใหม่ตามยอดเป้าหมายทุกเดือน (แนะนำ)',
+    description: 'ยอดคงเหลือเดือนนี้เก็บเข้ากองกลางก่อน แล้วเติมให้ถึงเป้าหมายที่ตั้งไว้',
+  },
+  {
+    value: 'SWEEP',
+    label: 'คืนเงินเหลือ ต้องจัดสรรใหม่เอง',
+    description: 'สิ้นเดือนยอดคงเหลือกลับเข้ากองกลางทั้งหมด เดือนใหม่เริ่มจาก 0',
+  },
+  {
+    value: 'ROLLOVER',
+    label: 'ยกยอดคงเหลือไปเดือนหน้า',
+    description: 'เร็วๆ นี้',
+    disabled: true,
+  },
+];
 
 const PRESET_ICONS = [
   '💰','🍔','🚗','🛍️','🎬','🏠','💊','✈️',
@@ -34,6 +55,8 @@ export function BudgetForm({ open, onClose, budget }: Props) {
   const [icon, setIcon] = useState('💰');
   const [color, setColor] = useState('#3B82F6');
   const [allocatedAmount, setAllocatedAmount] = useState('');
+  const [rolloverPolicy, setRolloverPolicy] = useState<RolloverPolicy>('RESET');
+  const [monthlyTarget, setMonthlyTarget] = useState('');
 
   // Reset form every time the modal opens or budget changes
   useEffect(() => {
@@ -42,6 +65,8 @@ export function BudgetForm({ open, onClose, budget }: Props) {
       setIcon(budget?.icon ?? '💰');
       setColor(budget?.color ?? '#3B82F6');
       setAllocatedAmount(budget ? String(Number(budget.allocatedAmount)) : '');
+      setRolloverPolicy(budget?.rolloverPolicy ?? 'RESET');
+      setMonthlyTarget(budget?.monthlyTarget != null ? String(Number(budget.monthlyTarget)) : '');
     }
   }, [open, budget]);
 
@@ -63,6 +88,8 @@ export function BudgetForm({ open, onClose, budget }: Props) {
   const enteredAmount = parseFloat(allocatedAmount) || 0;
   const exceedsAvailable = enteredAmount > availableToAllocate && totalBalance > 0;
 
+  const monthlyTargetInvalid = isMonthlyTargetInvalid(rolloverPolicy, monthlyTarget);
+
   const create = useCreateBudget();
   const update = useUpdateBudget();
   const isLoading = create.isPending || update.isPending;
@@ -72,8 +99,16 @@ export function BudgetForm({ open, onClose, budget }: Props) {
     const amount = parseFloat(allocatedAmount);
     if (isNaN(amount) || amount < 0) return;
     if (exceedsAvailable) return;
+    if (monthlyTargetInvalid) return;
 
-    const data = { name: name.trim(), icon, color, allocatedAmount: amount };
+    const data = {
+      name: name.trim(),
+      icon,
+      color,
+      allocatedAmount: amount,
+      rolloverPolicy,
+      monthlyTarget: resolveMonthlyTarget(rolloverPolicy, monthlyTarget),
+    };
 
     if (isEditing) {
       update.mutate({ id: budget.id, ...data }, { onSuccess: onClose });
@@ -164,6 +199,64 @@ export function BudgetForm({ open, onClose, budget }: Props) {
           )}
         </div>
 
+        {/* Rollover policy */}
+        <div>
+          <label className="label">รูปแบบเมื่อขึ้นเดือนใหม่</label>
+          <div className="space-y-2">
+            {POLICY_OPTIONS.map((opt) => (
+              <label
+                key={opt.value}
+                title={opt.disabled ? 'เร็วๆ นี้' : undefined}
+                className={cn(
+                  'flex items-start gap-3 p-3 rounded-xl border-2 transition-all',
+                  opt.disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+                  rolloverPolicy === opt.value
+                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
+                    : 'border-gray-200 dark:border-gray-700',
+                )}
+              >
+                <input
+                  type="radio"
+                  name="rolloverPolicy"
+                  className="mt-1"
+                  checked={rolloverPolicy === opt.value}
+                  disabled={opt.disabled}
+                  onChange={() => setRolloverPolicy(opt.value)}
+                />
+                <div>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">{opt.label}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">{opt.description}</p>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Monthly target — only meaningful for RESET */}
+        {shouldShowMonthlyTargetField(rolloverPolicy) && (
+          <div>
+            <Input
+              label="ยอดเป้าหมายต่อเดือน (ไม่บังคับ)"
+              type="number"
+              min="0"
+              step="0.01"
+              value={monthlyTarget}
+              onChange={(e) => setMonthlyTarget(e.target.value)}
+              placeholder="เว้นว่าง = ใช้ยอดจัดสรรปัจจุบัน"
+              error={monthlyTargetInvalid ? 'ยอดเป้าหมายต้องไม่ติดลบ' : undefined}
+            />
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              เดือนใหม่ระบบจะเติมเงินให้ซองนี้จนถึงยอดนี้ เช่น ตั้ง 6,000 เหลือจากเดือนก่อน 1,000 → เติมอีก 5,000
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              ถ้าเงินกองกลางไม่พอ จะเติมให้เท่าที่มี
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              ถ้าเหลือมากกว่ายอดเป้าหมาย จะไม่หักออก เงินส่วนเกินอยู่ในซองต่อ
+            </p>
+          </div>
+        )}
+
         {/* Live Preview */}
         <div
           className="flex items-center gap-3 p-4 rounded-2xl border-2 transition-all"
@@ -204,7 +297,7 @@ export function BudgetForm({ open, onClose, budget }: Props) {
             type="submit"
             className="flex-1"
             loading={isLoading}
-            disabled={!name.trim() || !allocatedAmount || exceedsAvailable}
+            disabled={!name.trim() || !allocatedAmount || exceedsAvailable || monthlyTargetInvalid}
           >
             {isEditing ? 'บันทึกการแก้ไข' : 'สร้าง Budget'}
           </Button>

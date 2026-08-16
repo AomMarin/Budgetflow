@@ -10,6 +10,14 @@ export const createBudgetValidation = [
   body('allocatedAmount')
     .isFloat({ min: 0 })
     .withMessage('Allocated amount must be a non-negative number'),
+  body('rolloverPolicy')
+    .optional()
+    .isIn(['RESET', 'ROLLOVER', 'SWEEP'])
+    .withMessage('Invalid rollover policy'),
+  body('monthlyTarget')
+    .optional({ nullable: true })
+    .isFloat({ min: 0 })
+    .withMessage('Monthly target must be a non-negative number'),
 ];
 
 export const updateBudgetValidation = [
@@ -20,6 +28,14 @@ export const updateBudgetValidation = [
     .matches(/^#[0-9A-Fa-f]{6}$/)
     .withMessage('Color must be a valid hex color'),
   body('allocatedAmount').optional().isFloat({ min: 0 }).withMessage('Must be non-negative'),
+  body('rolloverPolicy')
+    .optional()
+    .isIn(['RESET', 'ROLLOVER', 'SWEEP'])
+    .withMessage('Invalid rollover policy'),
+  body('monthlyTarget')
+    .optional({ nullable: true })
+    .isFloat({ min: 0 })
+    .withMessage('Monthly target must be a non-negative number'),
 ];
 
 export const allocateIncomeValidation = [

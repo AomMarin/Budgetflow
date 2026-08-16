@@ -23,6 +23,8 @@ export interface Account {
   isDefault: boolean;
 }
 
+export type RolloverPolicy = 'RESET' | 'ROLLOVER' | 'SWEEP';
+
 export interface Budget {
   id: string;
   userId: string;
@@ -36,6 +38,10 @@ export interface Budget {
   alertLevel: '80' | '90' | '100' | null;
   isArchived: boolean;
   sortOrder: number;
+  rolloverPolicy: RolloverPolicy;
+  monthlyTarget: number | null;
+  periodYear: number;
+  periodMonth: number;
   createdAt: string;
 }
 

@@ -43,6 +43,7 @@ model User {
   allocations           Allocation[]
   recurringTransactions RecurringTransaction[]
   notifications         Notification[]
+  budgetMonthlyHistory  BudgetMonthlyHistory[]
   ownedHouseholds       Household[]            @relation("HouseholdOwner")
   householdMembership   HouseholdMember?
   actedTransactions     Transaction[]          @relation("TransactionActor")
@@ -69,29 +70,61 @@ model Account {
 }
 
 model Budget {
-  id               String   @id @default(cuid())
+  id               String         @id @default(cuid())
   userId           String
   name             String
-  icon             String   @default("💰")
-  color            String   @default("#3B82F6")
-  allocatedAmount  Decimal  @default(0) @db.Decimal(15, 2)
-  spentAmount      Decimal  @default(0) @db.Decimal(15, 2)
-  isArchived       Boolean  @default(false)
-  sortOrder        Int      @default(0)
+  icon             String         @default("💰")
+  color            String         @default("#3B82F6")
+  allocatedAmount  Decimal        @default(0) @db.Decimal(15, 2)
+  spentAmount      Decimal        @default(0) @db.Decimal(15, 2)
+  isArchived       Boolean        @default(false)
+  sortOrder        Int            @default(0)
   lastAlertedLevel Int?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  rolloverPolicy   RolloverPolicy @default(RESET)
+  monthlyTarget    Decimal?       @db.Decimal(15, 2)
+  periodYear       Int            @default(dbgenerated("EXTRACT(YEAR FROM (now() AT TIME ZONE 'Asia/Bangkok'))::int"))
+  periodMonth      Int            @default(dbgenerated("EXTRACT(MONTH FROM (now() AT TIME ZONE 'Asia/Bangkok'))::int"))
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
 
-  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                  User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions          Transaction[]
-  transfersFrom         Transfer[]             @relation("TransferFrom")
-  transfersTo           Transfer[]             @relation("TransferTo")
+  transfersFrom         Transfer[]              @relation("TransferFrom")
+  transfersTo           Transfer[]              @relation("TransferTo")
   importRules           ImportRule[]
   allocations           Allocation[]
   recurringTransactions RecurringTransaction[]
   splits                TransactionSplit[]
+  monthlyHistory        BudgetMonthlyHistory[]
 
   @@map("budgets")
+}
+
+enum RolloverPolicy {
+  RESET
+  ROLLOVER
+  SWEEP
+}
+
+// One row per budget per calendar month it was closed — snapshot taken at close time.
+// closedAt is bookkeeping only; year/month (not closedAt) is what carry-forward math reads.
+model BudgetMonthlyHistory {
+  id              String         @id @default(cuid())
+  budgetId        String
+  userId          String
+  year            Int
+  month           Int
+  allocatedAmount Decimal        @db.Decimal(15, 2)
+  spentAmount     Decimal        @db.Decimal(15, 2)
+  rolloverPolicy  RolloverPolicy
+  closedAt        DateTime       @default(now())
+
+  budget Budget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([budgetId, year, month])
+  @@index([userId, year, month])
+  @@map("budget_monthly_history")
 }
 
 // Records each income allocation event (distributing income into buckets)
