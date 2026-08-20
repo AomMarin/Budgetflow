@@ -6,6 +6,7 @@ import { prisma } from '../../config/database';
 import { buildPaginationMeta } from '../../utils/response';
 import { getBangkokYearMonth, isBeforeYearMonth } from '../../utils/period';
 import { assertBudgetsPeriodOpen, closedPeriodError } from '../../utils/period-guard';
+import { withRetry } from '../../utils/db-retry';
 
 type BudgetLockRow = { id: string; name: string; allocatedAmount: string; spentAmount: string };
 type Split = { budgetId: string; amount: number };
@@ -118,7 +119,7 @@ export class TransactionService {
   }
 
   async create(userId: string, dto: CreateTransactionDto, actorUserId?: string) {
-    const transaction = await prisma.$transaction(async (tx) => {
+    const transaction = await withRetry(() => prisma.$transaction(async (tx) => {
       const [account] = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT id FROM accounts WHERE id = ${dto.accountId} AND "userId" = ${userId} FOR UPDATE`;
       if (!account) throw Object.assign(new Error('Account not found'), { status: 404 });
@@ -186,7 +187,7 @@ export class TransactionService {
       }
 
       return created;
-    });
+    }), 'transaction.create');
 
     return transaction;
   }
@@ -220,7 +221,7 @@ export class TransactionService {
       }
     }
 
-    return prisma.$transaction(async (tx) => {
+    return withRetry(() => prisma.$transaction(async (tx) => {
       let newSplits: Split[] = [];
       if (newType === 'EXPENSE' && newBudgetId) {
         newSplits = await this.lockAndResolveExpenseSplits(
@@ -323,7 +324,7 @@ export class TransactionService {
         },
         tx,
       );
-    });
+    }), 'transaction.update');
   }
 
   // No borrow support here: batch entry has no per-row UI to pick a borrow
@@ -371,7 +372,7 @@ export class TransactionService {
       }
     }
 
-    await prisma.$transaction(async (tx) => {
+    await withRetry(() => prisma.$transaction(async (tx) => {
       for (const dto of items) {
         await tx.transaction.create({
           data: {
@@ -403,7 +404,7 @@ export class TransactionService {
           }
         }
       }
-    });
+    }), 'transaction.batchCreate');
 
     return items.length;
   }
@@ -420,7 +421,7 @@ export class TransactionService {
 
     const splits = await prisma.transactionSplit.findMany({ where: { transactionId: id } });
 
-    await prisma.$transaction(async (tx) => {
+    await withRetry(() => prisma.$transaction(async (tx) => {
       const affectedBudgetIds =
         existing.type === 'EXPENSE'
           ? splits.length > 0
@@ -458,6 +459,6 @@ export class TransactionService {
 
       // Deleting the Transaction row cascades to its TransactionSplit rows.
       await this.repo.delete(id, userId, tx);
-    });
+    }), 'transaction.delete');
   }
 }

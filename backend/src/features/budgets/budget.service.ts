@@ -4,6 +4,7 @@ import { CreateBudgetDto, UpdateBudgetDto, AllocateIncomeDto } from './budget.dt
 import { prisma } from '../../config/database';
 import { getBangkokYearMonth, nextYearMonth, isBeforeYearMonth, YearMonth } from '../../utils/period';
 import { logger } from '../../utils/logger';
+import { withRetry } from '../../utils/db-retry';
 
 function periodOf(budget: Budget): YearMonth {
   return { year: budget.periodYear, month: budget.periodMonth };
@@ -59,7 +60,7 @@ export class BudgetService {
 
   async create(userId: string, dto: CreateBudgetDto): Promise<BudgetWithStats> {
     this.assertRolloverPolicySupported(dto.rolloverPolicy);
-    const budget = await prisma.$transaction(async (tx) => {
+    const budget = await withRetry(() => prisma.$transaction(async (tx) => {
       await this.lockUser(tx, userId);
 
       const [{ totalRemaining }, totalBalance] = await Promise.all([
@@ -80,13 +81,13 @@ export class BudgetService {
         );
       }
       return this.repo.create(userId, dto, tx);
-    });
+    }), 'budget.create');
     return this.addStats(budget);
   }
 
   async update(id: string, userId: string, dto: UpdateBudgetDto): Promise<BudgetWithStats> {
     this.assertRolloverPolicySupported(dto.rolloverPolicy);
-    const budget = await prisma.$transaction(async (tx) => {
+    const budget = await withRetry(() => prisma.$transaction(async (tx) => {
       await this.lockUser(tx, userId);
 
       const existing = await tx.budget.findFirst({ where: { id, userId } });
@@ -128,7 +129,7 @@ export class BudgetService {
       }
 
       return this.repo.update(id, userId, dto, tx);
-    });
+    }), 'budget.update');
     return this.addStats(budget);
   }
 
@@ -158,7 +159,7 @@ export class BudgetService {
       );
     }
 
-    await prisma.$transaction(async (tx) => {
+    await withRetry(() => prisma.$transaction(async (tx) => {
       // Record income and increase account balance
       await tx.transaction.create({
         data: {
@@ -195,17 +196,21 @@ export class BudgetService {
           },
         });
       }
-    });
+    }), 'budget.allocateIncome');
   }
 
   async reorder(userId: string, orderedIds: string[]): Promise<void> {
-    await prisma.$transaction(
-      orderedIds.map((id, index) =>
-        prisma.budget.updateMany({
-          where: { id, userId },
-          data: { sortOrder: index },
-        }),
-      ),
+    await withRetry(
+      () =>
+        prisma.$transaction(
+          orderedIds.map((id, index) =>
+            prisma.budget.updateMany({
+              where: { id, userId },
+              data: { sortOrder: index },
+            }),
+          ),
+        ),
+      'budget.reorder',
     );
   }
 
@@ -263,30 +268,34 @@ export class BudgetService {
   async closeAndAdvancePeriodsForUser(userId: string, now: Date = new Date()): Promise<void> {
     const current = getBangkokYearMonth(now);
 
-    await prisma.$transaction(
-      async (tx) => {
-        await this.lockUser(tx, userId);
+    await withRetry(
+      () =>
+        prisma.$transaction(
+          async (tx) => {
+            await this.lockUser(tx, userId);
 
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const budgets = await this.repo.findAll(userId, tx);
-          const behind = budgets.filter((b) => isBeforeYearMonth(periodOf(b), current));
-          if (behind.length === 0) break;
+            // eslint-disable-next-line no-constant-condition
+            while (true) {
+              const budgets = await this.repo.findAll(userId, tx);
+              const behind = budgets.filter((b) => isBeforeYearMonth(periodOf(b), current));
+              if (behind.length === 0) break;
 
-          for (const budget of behind) {
-            if (budget.rolloverPolicy === RolloverPolicy.RESET) continue;
-            await this.closeLocalBudgetMonth(tx, budget);
-          }
+              for (const budget of behind) {
+                if (budget.rolloverPolicy === RolloverPolicy.RESET) continue;
+                await this.closeLocalBudgetMonth(tx, budget);
+              }
 
-          const resetBehind = behind
-            .filter((b) => b.rolloverPolicy === RolloverPolicy.RESET)
-            .sort((a, b) => a.sortOrder - b.sortOrder);
-          for (const stub of resetBehind) {
-            await this.closeResetBudgetMonth(tx, userId, stub.id);
-          }
-        }
-      },
-      { timeout: 30000 },
+              const resetBehind = behind
+                .filter((b) => b.rolloverPolicy === RolloverPolicy.RESET)
+                .sort((a, b) => a.sortOrder - b.sortOrder);
+              for (const stub of resetBehind) {
+                await this.closeResetBudgetMonth(tx, userId, stub.id);
+              }
+            }
+          },
+          { timeout: 30000 },
+        ),
+      'budget.closeAndAdvancePeriodsForUser',
     );
   }
 

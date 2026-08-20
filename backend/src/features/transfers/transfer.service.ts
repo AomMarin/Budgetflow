@@ -1,5 +1,6 @@
 import { prisma } from '../../config/database';
 import { buildPaginationMeta } from '../../utils/response';
+import { withRetry } from '../../utils/db-retry';
 
 export interface CreateTransferDto {
   fromBudgetId: string;
@@ -23,7 +24,7 @@ export class TransferService {
       throw Object.assign(new Error('Cannot transfer to the same budget'), { status: 400 });
     }
 
-    return prisma.$transaction(async (tx) => {
+    return withRetry(() => prisma.$transaction(async (tx) => {
       // Row-locked read: prevents two concurrent transfers from the same
       // budget both passing the check against the same stale spentAmount.
       const [fromBudget] = await tx.$queryRaw<
@@ -70,7 +71,7 @@ export class TransferService {
       });
 
       return transfer;
-    });
+    }), 'transfer.create');
   }
 
   async getAll(userId: string, page = 1, limit = 20) {
