@@ -347,6 +347,25 @@ Archived budget: ข้ามอัตโนมัติฟรี ไม่ต�
 4. **สำคัญสุด**: บันทึก transaction ปกติ (วันที่ปัจจุบัน, ไม่ backdate) ต้อง**ไม่**โดน closed-period guard บล็อก — เพราะ guard เพิ่งเขียนใหม่ ยังไม่เคยเจอ production data/traffic จริง ถ้าพลาดจะบล็อกผู้ใช้จริงบันทึกรายการไม่ได้เลย
 5. mobile viewport จริง (390px) — ค้างมาตั้งแต่ Phase 2 (`BorrowBudgetModal`/split detail line) ยังไม่เคยเห็นด้วยตาบน production เช่นกัน ควรเทสพร้อมกันคราวเดียว
 
+### Neon connection ตายจาก scale-to-zero — retry fix (2026-08-21)
+
+**อาการ**: หลัง Phase 3 deploy ไม่กี่วัน เจอ backend ตอบ error เป็นพักๆ — หน้าเว็บแสดงเป็น **CORS error หลอกๆ** (browser ไม่ได้ header `Access-Control-Allow-Origin` เพราะ backend ไม่ตอบเลย ไม่ใช่เพราะ CORS policy จริง) กับ 503 — ดูใน Render log เจอ `prisma:error Error { kind: Closed, cause: None }` วนซ้ำจนกว่า Render จะ spin down (~15-18 นาที) ทุกรอบที่ instance ตื่นใหม่ **บทเรียน**: เจอ CORS error ในหน้าเว็บ อย่าเชื่อว่าเป็น CORS จริงทันที เปิด `/health` ตรงๆ ใน browser ก่อนเสมอเพื่อแยกว่า backend ตอบไหม (เคสก่อนหน้าที่คล้ายกันคือ preview-URL ผิด ดู `budgetflow_vercel_preview_url_trap` ใน memory — CORS-looking error มีได้หลายสาเหตุ ไม่ใช่แค่ CORS config)
+
+**สาเหตุ**: Neon free tier scale-to-zero เมื่อไม่มี query ~5 นาที connection ที่ Prisma ถือค้างใน pool ตายตามไปด้วยเงียบๆ (Prisma ไม่รู้) พอมี request เข้ามาก็หยิบ connection ตายไปใช้ต่อ
+
+**Fix (commit `083006e`, push+deploy แล้ว)**: `backend/src/utils/db-retry.ts` — `withRetry(fn, label)` retry 1 ครั้ง เฉพาะ error class ที่เป็น connection/engine-level (`PrismaClientUnknownRequestError`, `PrismaClientInitializationError` เท่านั้น — ไม่ retry `PrismaClientKnownRequestError`/`PrismaClientValidationError`/`PrismaClientRustPanicError`) log error เต็ม (`name`/`code`/`message`/`className`) ทุกครั้งไม่ว่า retry หรือไม่ เพราะตอน implement ยังไม่ยืนยัน error shape จริงของ `kind: Closed` ใน production
+- ห่อทั้งก้อน `prisma.$transaction(...)` (ไม่ใช่ query เดี่ยวข้างใน) ที่ write path หลัก: `budget.service.ts` (`create`/`update`/`allocateIncome`/`reorder`/**`closeAndAdvancePeriodsForUser`** — จุดเสี่ยงสุดเพราะเป็น lazy hook ที่ยิงทุก read แรกหลัง idle นาน จังหวะเดียวกับที่ Neon สลบพอดี), `transaction.service.ts` (`create`/`update`/`batchCreate`/`delete`), `transfer.service.ts` (`create`)
+- `database.ts` เพิ่ม read-only query extension (`$extends`) retry เฉพาะ read operation — ต้อง cast กลับเป็น `PrismaClient` type เพราะ extended client type ไม่ match `Prisma.TransactionClient` ที่ repository ทุกไฟล์ใช้เป็น param (ตรวจแล้วไม่มี error ใหม่จาก `tsc`/`eslint`, test suite 55/55 ผ่านทั้งชุด)
+- Retry ปลอดภัยเพราะ Postgres transaction atomic — connection ตายก่อน commit ack กลับมาไม่ได้ = ไม่ commit เลย retry ทั้งก้อนได้ไม่ double-write **residual risk ที่ยอมรับไว้**: ถ้า connection ตายพอดีช่วงหลัง server commit แล้วแต่ ack ยังไม่ถึง client (window แคบมาก) retry จะรันซ้ำ — แก้ได้แค่ด้วย idempotency key ต่อ request ซึ่ง scope ใหญ่เกินงานนี้ ไม่ทำตอนนี้
+
+**ตั้งใจยังไม่แก้ตอน deploy**: connection string (`?sslmode=require&channel_binding=require`) บน Render **ยังไม่เปลี่ยน** — รอ user แก้เองทีหลัง แยก deploy จากโค้ดตั้งใจ (ไม่แก้พร้อมกัน) เพื่อแยกให้ออกว่าตัวไหนช่วยจริงถ้าอาการหายไป ค่าที่เตรียมไว้ให้แก้:
+```
+?sslmode=require&channel_binding=prefer&pgbouncer=true&connection_limit=1&pool_timeout=10&connect_timeout=15
+```
+`channel_binding=require → prefer` เพราะสงสัยว่า pooled-endpoint negotiation อาจ inconsistent ช่วง backend connection ใหม่ (plausible ไม่ใช่ยืนยัน) ที่เหลือคือ Prisma pool tuning มาตรฐานสำหรับ Neon pooled + Render free tier (1 instance) — **ต้องแก้ 2 ที่พร้อมกันเสมอ**: Render env var **และ** GitHub Actions secret `DATABASE_URL` (ตัว `.github/workflows/daily-job.yml` ใช้แยกจาก Render คนละ credential store)
+
+**ยังไม่ยืนยัน**: retry เคยทำงานจริงหรือยัง — ยังไม่เจอเคส `kind: Closed` เกิดขึ้นอีกหลัง deploy เพื่อพิสูจน์ วิธีเช็ครอบหน้า: หา log `db-retry: operation failed` ใน Render — เห็น `attempt: 1` แล้ว request สำเร็จต่อ = retry ทำงานถูก, ไม่เห็น log นี้เลยแต่ error รัวๆ = error class จริงไม่ตรง allowlist ต้องกลับมาแก้ `isRetryableConnectionError()`
+
 ### Phase 5 — ตั้งวันรีเซ็ตเอง (บันทึกไว้ 2026-08-16, ยังไม่เริ่มออกแบบ)
 
 ตอนนี้ปิดเดือนตามปฏิทิน (วันที่ 1) เท่านั้น อยากให้ผู้ใช้ตั้งวันตัดรอบเองได้ (เช่น ทุกวันที่ 25 ตามวันเงินเดือนออก) — ยังไม่ได้ออกแบบเลย แค่บันทึกประเด็นที่ต้องคิดตอนเริ่มออกแบบจริง:
