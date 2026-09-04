@@ -48,11 +48,12 @@ export function ContributeModal({ open, onClose }: Props) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (enteredAmount <= 0 || !accountId) return;
+    if (!budgetId) return;
     contribute.mutate(
       {
         amount: enteredAmount,
         fromAccountId: accountId,
-        fromBudgetId: budgetId || undefined,
+        fromBudgetId: budgetId,
         description: description || undefined,
       },
       { onSuccess: () => { reset(); onClose(); } },
@@ -91,9 +92,9 @@ export function ContributeModal({ open, onClose }: Props) {
         </div>
 
         <div>
-          <label className="label">นับเป็นรายจ่ายในงบของคุณ (ไม่ระบุก็ได้)</label>
-          <select value={budgetId} onChange={(e) => setBudgetId(e.target.value)} className="input">
-            <option value="">ไม่ระบุงบ</option>
+          <label className="label">นับเป็นรายจ่ายในงบของคุณ</label>
+          <select value={budgetId} onChange={(e) => setBudgetId(e.target.value)} className="input" required>
+            <option value="">เลือกงบ</option>
             {myBudgets.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.icon} {b.name} — เหลือ {formatCurrency(Number(b.remainingAmount))}
@@ -117,7 +118,7 @@ export function ContributeModal({ open, onClose }: Props) {
             type="submit"
             className="flex-1"
             loading={contribute.isPending}
-            disabled={enteredAmount <= 0 || !accountId}
+            disabled={enteredAmount <= 0 || !accountId || !budgetId}
           >
             สมทบเงิน
           </Button>

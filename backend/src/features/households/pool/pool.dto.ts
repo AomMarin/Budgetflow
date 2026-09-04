@@ -1,7 +1,11 @@
 export interface ContributeDto {
   amount: number;
   fromAccountId: string;
-  fromBudgetId?: string;
+  // Required — see pool.validation.ts: an unearmarked contribution decrements
+  // fromAccountId's balance without touching any budget's spentAmount, which
+  // let Sigma(remaining) silently exceed Sigma(balance) with no check
+  // catching it (the mindmint@budgetflow.app incident this closes).
+  fromBudgetId: string;
   description?: string;
 }
 

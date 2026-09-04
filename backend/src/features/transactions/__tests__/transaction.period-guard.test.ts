@@ -56,16 +56,20 @@ describe('TransactionService — closed-period guard', () => {
     expect(created.id).toBeTruthy();
   });
 
-  it('create() ignores the guard for an EXPENSE with no budget attached', async () => {
-    // No budget touched -> nothing for a closed month to protect, regardless of date.
-    const created = await txService.create(ctx.userId, {
-      accountId: ctx.accountId,
-      amount: 100,
-      type: 'EXPENSE',
-      description: 'cash withdrawal',
-      date: bkk(2020, 1),
-    });
-    expect(created.id).toBeTruthy();
+  it('create() rejects an EXPENSE with no budget attached, regardless of date', async () => {
+    // EXPENSE now always requires a budgetId (see
+    // transaction.expense-budget-required.test.ts) — an unbudgeted EXPENSE is
+    // no longer constructible at all, so there is nothing left for the
+    // closed-period guard to ignore here.
+    await expect(
+      txService.create(ctx.userId, {
+        accountId: ctx.accountId,
+        amount: 100,
+        type: 'EXPENSE',
+        description: 'cash withdrawal',
+        date: bkk(2020, 1),
+      }),
+    ).rejects.toMatchObject({ status: 400 });
   });
 
   it('create() ignores the guard for INCOME tagged with a budget (spentAmount is never touched)', async () => {

@@ -143,6 +143,11 @@ export class PoolService {
   }
 
   async contribute(actorUserId: string, dto: ContributeDto) {
+    // Defense in depth alongside contributeValidation — see ContributeDto
+    // comment: an unbudgeted contribution decremented balance with no budget
+    // ever picking up the slack, silently breaking the zero-based invariant.
+    if (!dto.fromBudgetId) this.badRequest('กรุณาเลือกงบสำหรับเงินสมทบ');
+
     const { membership, poolUserId } = await this.requirePool(actorUserId);
 
     const actor = await prisma.user.findUnique({ where: { id: actorUserId } });
@@ -160,28 +165,26 @@ export class PoolService {
     const poolDescription = `เงินสมทบจาก ${actor.name}`;
 
     return prisma.$transaction(async (tx) => {
-      if (dto.fromBudgetId) {
-        // Row-locked read: prevents two concurrent contributions from the same
-        // budget both passing the check against the same stale spentAmount.
-        const [budget] = await tx.$queryRaw<
-          Array<{ id: string; name: string; allocatedAmount: string; spentAmount: string }>
-        >`SELECT id, name, "allocatedAmount", "spentAmount" FROM budgets
-           WHERE id = ${dto.fromBudgetId} AND "userId" = ${actorUserId} FOR UPDATE`;
-        if (!budget) this.notFound('Budget not found');
+      // Row-locked read: prevents two concurrent contributions from the same
+      // budget both passing the check against the same stale spentAmount.
+      const [budget] = await tx.$queryRaw<
+        Array<{ id: string; name: string; allocatedAmount: string; spentAmount: string }>
+      >`SELECT id, name, "allocatedAmount", "spentAmount" FROM budgets
+         WHERE id = ${dto.fromBudgetId} AND "userId" = ${actorUserId} FOR UPDATE`;
+      if (!budget) this.notFound('Budget not found');
 
-        const remaining = Number(budget.allocatedAmount) - Number(budget.spentAmount);
-        if (dto.amount > remaining) {
-          this.badRequest(
-            `งบ "${budget.name}" ไม่พอ — เหลือ ${remaining.toFixed(2)} บาท ขาด ${(dto.amount - remaining).toFixed(2)} บาท`,
-          );
-        }
+      const remaining = Number(budget.allocatedAmount) - Number(budget.spentAmount);
+      if (dto.amount > remaining) {
+        this.badRequest(
+          `งบ "${budget.name}" ไม่พอ — เหลือ ${remaining.toFixed(2)} บาท ขาด ${(dto.amount - remaining).toFixed(2)} บาท`,
+        );
       }
 
       const memberTx = await tx.transaction.create({
         data: {
           userId: actorUserId,
           accountId: dto.fromAccountId,
-          budgetId: dto.fromBudgetId ?? null,
+          budgetId: dto.fromBudgetId,
           amount: dto.amount,
           type: 'EXPENSE',
           description,
@@ -192,12 +195,10 @@ export class PoolService {
         where: { id: dto.fromAccountId },
         data: { balance: { decrement: dto.amount } },
       });
-      if (dto.fromBudgetId) {
-        await tx.budget.update({
-          where: { id: dto.fromBudgetId },
-          data: { spentAmount: { increment: dto.amount } },
-        });
-      }
+      await tx.budget.update({
+        where: { id: dto.fromBudgetId },
+        data: { spentAmount: { increment: dto.amount } },
+      });
 
       const poolTx = await tx.transaction.create({
         data: {

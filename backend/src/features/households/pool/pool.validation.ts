@@ -3,7 +3,8 @@ import { body } from 'express-validator';
 export const contributeValidation = [
   body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be positive'),
   body('fromAccountId').isString().notEmpty().withMessage('Account is required'),
-  body('fromBudgetId').optional().isString(),
+  // Required, not optional — see ContributeDto comment.
+  body('fromBudgetId').isString().notEmpty().withMessage('กรุณาเลือกงบสำหรับเงินสมทบ'),
   body('description').optional().isString(),
 ];
 

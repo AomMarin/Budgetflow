@@ -163,9 +163,14 @@ export function TransactionForm({ open, onClose, transaction }: Props) {
 
         {type === 'EXPENSE' && (
           <div>
-            <label className="label">Budget (optional)</label>
-            <select value={budgetId} onChange={(e) => setBudgetId(e.target.value)} className="input">
-              <option value="">No budget / Uncategorized</option>
+            <label className="label">Budget</label>
+            <select
+              value={budgetId}
+              onChange={(e) => setBudgetId(e.target.value)}
+              className="input"
+              required
+            >
+              <option value="">Select budget</option>
               {budgets.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.icon} {b.name} — เหลือ {formatCurrency(Number(b.remainingAmount))}

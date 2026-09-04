@@ -44,6 +44,19 @@ export class TransactionService {
     return row;
   }
 
+  // An EXPENSE with no budgetId decrements Account.balance without ever
+  // touching any budget's spentAmount — nothing keeps Sigma(remaining) in
+  // step with that balance drop, so Sigma(remaining) can silently exceed
+  // Sigma(balance) with no check anywhere catching it (see the
+  // mindmint@budgetflow.app incident this closes). INCOME is exempt: it
+  // doesn't affect any budget by design (see CLAUDE.md), so it never needed
+  // one.
+  private assertBudgetIdRequiredForExpense(type: string, budgetId: string | null | undefined): void {
+    if (type === 'EXPENSE' && !budgetId) {
+      throw Object.assign(new Error('กรุณาเลือกงบสำหรับรายจ่าย'), { status: 400 });
+    }
+  }
+
   // Pure validation over already-locked rows — decides whether the expense
   // fits in the primary budget alone (returns [], the common case: caller
   // keeps the old single-budget spentAmount increment, no split rows) or
@@ -119,6 +132,7 @@ export class TransactionService {
   }
 
   async create(userId: string, dto: CreateTransactionDto, actorUserId?: string) {
+    this.assertBudgetIdRequiredForExpense(dto.type, dto.budgetId);
     const transaction = await withRetry(() => prisma.$transaction(async (tx) => {
       const [account] = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT id FROM accounts WHERE id = ${dto.accountId} AND "userId" = ${userId} FOR UPDATE`;
@@ -206,6 +220,7 @@ export class TransactionService {
 
     const newType = dto.type ?? existing.type;
     const newBudgetId = dto.budgetId !== undefined ? dto.budgetId : existing.budgetId;
+    this.assertBudgetIdRequiredForExpense(newType, newBudgetId);
     const newAmount = dto.amount ?? Number(existing.amount);
     // Never inherited from the prior state — see UpdateTransactionDto comment.
     const newBorrowFromBudgetId = dto.borrowFromBudgetId ?? null;
@@ -354,6 +369,7 @@ export class TransactionService {
     }
 
     for (const dto of items) {
+      this.assertBudgetIdRequiredForExpense(dto.type, dto.budgetId);
       if (dto.type === 'EXPENSE' && dto.budgetId) {
         const entry = budgetRemaining.get(dto.budgetId)!;
         const txPeriod = getBangkokYearMonth(new Date(dto.date));

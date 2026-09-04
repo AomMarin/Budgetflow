@@ -113,7 +113,7 @@ export function usePoolTransactions(enabled: boolean) {
 export function usePoolContribute() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: { amount: number; fromAccountId: string; fromBudgetId?: string; description?: string }) =>
+    mutationFn: (data: { amount: number; fromAccountId: string; fromBudgetId: string; description?: string }) =>
       api.post('/households/pool/contribute', data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: POOL_KEY });
