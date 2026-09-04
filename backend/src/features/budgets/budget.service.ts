@@ -10,6 +10,25 @@ function periodOf(budget: Budget): YearMonth {
   return { year: budget.periodYear, month: budget.periodMonth };
 }
 
+// Thrown from inside the close transaction to force a rollback when the
+// caller only wants a preview (script --dry-run) — Postgres rolls back the
+// whole transaction on any thrown error, so nothing this call did persists.
+// Not a Prisma error class, so db-retry's isRetryableConnectionError() never
+// matches it and never retries or logs it as a failure.
+class DryRunAbort extends Error {}
+
+export interface CloseReportEntry {
+  userId: string;
+  budgetId: string;
+  budgetName: string;
+  policy: RolloverPolicy;
+  closedPeriod: YearMonth;
+  newPeriod: YearMonth;
+  oldAllocated: number;
+  oldSpent: number;
+  newAllocated: number;
+}
+
 export interface BudgetWithStats extends Budget {
   remainingAmount: number;
   usagePercent: number;
@@ -20,6 +39,7 @@ export class BudgetService {
   constructor(private readonly repo = new BudgetRepository()) {}
 
   async getAll(userId: string): Promise<BudgetWithStats[]> {
+    await this.closeAndAdvancePeriodsForUser(userId);
     const budgets = await this.repo.findAll(userId);
     return budgets.map(this.addStats);
   }
@@ -265,55 +285,81 @@ export class BudgetService {
   // closes RESET budgets in sortOrder, re-querying the pool fresh (via the
   // same tx, so it sees every write already committed in this call) before
   // each one — first-come-first-served if the pool runs out mid-pass.
-  async closeAndAdvancePeriodsForUser(userId: string, now: Date = new Date()): Promise<void> {
+  // `dryRun: true` runs the exact same close logic (same math, same pool
+  // contention across budgets) inside a real transaction, then rolls it back
+  // instead of committing — so the returned report reflects what a real run
+  // would do without writing anything. Used by scripts/close-stale-periods.ts;
+  // production call sites (getAll/getSummary/daily cron) never pass this.
+  async closeAndAdvancePeriodsForUser(
+    userId: string,
+    now: Date = new Date(),
+    options?: { dryRun?: boolean },
+  ): Promise<CloseReportEntry[]> {
     const current = getBangkokYearMonth(now);
+    const dryRun = options?.dryRun ?? false;
+    const report: CloseReportEntry[] = [];
 
-    await withRetry(
-      () =>
-        prisma.$transaction(
-          async (tx) => {
-            await this.lockUser(tx, userId);
+    const runClose = () =>
+      prisma.$transaction(
+        async (tx) => {
+          await this.lockUser(tx, userId);
 
-            // eslint-disable-next-line no-constant-condition
-            while (true) {
-              const budgets = await this.repo.findAll(userId, tx);
-              const behind = budgets.filter((b) => isBeforeYearMonth(periodOf(b), current));
-              if (behind.length === 0) break;
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            const budgets = await this.repo.findAll(userId, tx);
+            const behind = budgets.filter((b) => isBeforeYearMonth(periodOf(b), current));
+            if (behind.length === 0) break;
 
-              for (const budget of behind) {
-                if (budget.rolloverPolicy === RolloverPolicy.RESET) continue;
-                await this.closeLocalBudgetMonth(tx, budget);
-              }
-
-              const resetBehind = behind
-                .filter((b) => b.rolloverPolicy === RolloverPolicy.RESET)
-                .sort((a, b) => a.sortOrder - b.sortOrder);
-              for (const stub of resetBehind) {
-                await this.closeResetBudgetMonth(tx, userId, stub.id);
-              }
+            for (const budget of behind) {
+              if (budget.rolloverPolicy === RolloverPolicy.RESET) continue;
+              report.push(await this.closeLocalBudgetMonth(tx, budget));
             }
-          },
-          { timeout: 30000 },
-        ),
-      'budget.closeAndAdvancePeriodsForUser',
-    );
+
+            const resetBehind = behind
+              .filter((b) => b.rolloverPolicy === RolloverPolicy.RESET)
+              .sort((a, b) => a.sortOrder - b.sortOrder);
+            for (const stub of resetBehind) {
+              report.push(await this.closeResetBudgetMonth(tx, userId, stub.id));
+            }
+          }
+
+          if (dryRun) throw new DryRunAbort();
+        },
+        { timeout: 30000 },
+      );
+
+    try {
+      // No withRetry on the dry-run path: it's an interactive one-off script
+      // call, not a production request, and withRetry's unconditional error
+      // log would misreport this intentional rollback as a failure.
+      if (dryRun) await runClose();
+      else await withRetry(runClose, 'budget.closeAndAdvancePeriodsForUser');
+    } catch (err) {
+      if (!(err instanceof DryRunAbort)) throw err;
+    }
+
+    return report;
   }
 
   // SWEEP / ROLLOVER: purely local to this budget, no pool involved.
-  private async closeLocalBudgetMonth(tx: Prisma.TransactionClient, budget: Budget): Promise<void> {
+  private async closeLocalBudgetMonth(tx: Prisma.TransactionClient, budget: Budget): Promise<CloseReportEntry> {
     const oldAllocated = Number(budget.allocatedAmount);
     const oldSpent = Number(budget.spentAmount);
     const newAllocated =
       budget.rolloverPolicy === RolloverPolicy.ROLLOVER ? Math.max(oldAllocated - oldSpent, 0) : 0;
 
-    await this.commitMonthClose(tx, budget, oldAllocated, oldSpent, newAllocated);
+    return this.commitMonthClose(tx, budget, oldAllocated, oldSpent, newAllocated);
   }
 
   // RESET: draws from the pool shared across the user's whole budget set.
   // Re-fetches the budget and the pool fresh inside tx — must not reuse the
   // stale `behind` snapshot from the caller's loop, since prior budgets
   // closed earlier in this same pass already changed both.
-  private async closeResetBudgetMonth(tx: Prisma.TransactionClient, userId: string, budgetId: string): Promise<void> {
+  private async closeResetBudgetMonth(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    budgetId: string,
+  ): Promise<CloseReportEntry> {
     const budget = await tx.budget.findUniqueOrThrow({ where: { id: budgetId } });
     const oldAllocated = Number(budget.allocatedAmount);
     const oldSpent = Number(budget.spentAmount);
@@ -342,7 +388,7 @@ export class BudgetService {
     const topup = Math.min(Math.max(target - oldRemaining, 0), Math.max(pool, 0));
     const newAllocated = oldRemaining + topup;
 
-    await this.commitMonthClose(tx, budget, oldAllocated, oldSpent, newAllocated);
+    return this.commitMonthClose(tx, budget, oldAllocated, oldSpent, newAllocated);
   }
 
   private async commitMonthClose(
@@ -351,7 +397,7 @@ export class BudgetService {
     oldAllocated: number,
     oldSpent: number,
     newAllocated: number,
-  ): Promise<void> {
+  ): Promise<CloseReportEntry> {
     const closedPeriod = periodOf(budget);
     const next = nextYearMonth(closedPeriod);
 
@@ -380,6 +426,18 @@ export class BudgetService {
       },
       update: {},
     });
+
+    return {
+      userId: budget.userId,
+      budgetId: budget.id,
+      budgetName: budget.name,
+      policy: budget.rolloverPolicy,
+      closedPeriod,
+      newPeriod: next,
+      oldAllocated,
+      oldSpent,
+      newAllocated,
+    };
   }
 
   private addStats(budget: Budget): BudgetWithStats {

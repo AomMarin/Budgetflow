@@ -1,8 +1,16 @@
 import { prisma } from '../../config/database';
 import { getExpenseByBudget } from '../../utils/split-aware-spend';
+import { BudgetService } from '../budgets/budget.service';
 
 export class DashboardService {
+  constructor(private readonly budgetService = new BudgetService()) {}
+
   async getSummary(userId: string) {
+    // Must run before the Promise.all below (not inside it) — account/budget
+    // reads there have to see whatever this closes, same reason getAll() in
+    // budget.service.ts calls it before its own read.
+    await this.budgetService.closeAndAdvancePeriodsForUser(userId);
+
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);

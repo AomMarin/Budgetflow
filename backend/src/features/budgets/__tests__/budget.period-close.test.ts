@@ -4,6 +4,7 @@ import { BudgetService } from '../budget.service';
 import { TransactionService } from '../../transactions/transaction.service';
 import { prisma } from '../../../config/database';
 import { createTestUser, cleanupTestUser, assertZeroBasedInvariant, TestUserContext } from '../../../test/helpers';
+import { getBangkokYearMonth } from '../../../utils/period';
 
 // Mid-day UTC so the Bangkok (UTC+7) calendar date never crosses a day
 // boundary — avoids off-by-one flakiness near midnight.
@@ -225,5 +226,62 @@ describe('BudgetService.closeAndAdvancePeriodsForUser', () => {
     const historyCountB = await prisma.budgetMonthlyHistory.count({ where: { budgetId: b.id } });
     expect(historyCountA).toBe(1);
     expect(historyCountB).toBe(1);
+  });
+
+  it('dryRun reports what would close but writes nothing', async () => {
+    const b = await budgetService.create(ctx.userId, { name: 'Food', icon: '🍔', color: '#3B82F6', allocatedAmount: 500 });
+    await setPeriod(b.id, 2026, 1, { rolloverPolicy: RolloverPolicy.SWEEP, spentAmount: 200 });
+
+    const report = await budgetService.closeAndAdvancePeriodsForUser(ctx.userId, bkk(2026, 2), { dryRun: true });
+
+    expect(report).toHaveLength(1);
+    expect(report[0]).toMatchObject({
+      budgetId: b.id,
+      closedPeriod: { year: 2026, month: 1 },
+      newPeriod: { year: 2026, month: 2 },
+      oldAllocated: 500,
+      oldSpent: 200,
+      newAllocated: 0,
+    });
+
+    // Rolled back — nothing in the DB actually moved.
+    const after = await prisma.budget.findUniqueOrThrow({ where: { id: b.id } });
+    expect(after.periodYear).toBe(2026);
+    expect(after.periodMonth).toBe(1);
+    expect(Number(after.spentAmount)).toBe(200);
+    const historyCount = await prisma.budgetMonthlyHistory.count({ where: { budgetId: b.id } });
+    expect(historyCount).toBe(0);
+  });
+});
+
+// These three cover the actual gap that let the fully-tested close logic
+// above sit unused in production for a month: nothing verified that any real
+// caller (a budget read, a dashboard read, the daily cron) ever invokes
+// closeAndAdvancePeriodsForUser. Assert against end-to-end behavior, not a
+// spy on the method, or a future refactor that renames/inlines the call
+// could pass these tests while reintroducing the same silent gap.
+describe('lazy period-close hook wiring', () => {
+  let ctx: TestUserContext;
+  const budgetService = new BudgetService();
+
+  beforeEach(async () => {
+    ctx = await createTestUser(1000);
+  });
+
+  afterEach(async () => {
+    await cleanupTestUser(ctx.userId);
+  });
+
+  it('BudgetService.getAll() advances a stale period before returning', async () => {
+    const b = await budgetService.create(ctx.userId, { name: 'Food', icon: '🍔', color: '#3B82F6', allocatedAmount: 500 });
+    await setPeriod(b.id, 2020, 1, { rolloverPolicy: RolloverPolicy.SWEEP, spentAmount: 200 });
+
+    const budgets = await budgetService.getAll(ctx.userId);
+
+    const { year, month } = getBangkokYearMonth();
+    const after = budgets.find((x) => x.id === b.id);
+    expect(after?.periodYear).toBe(year);
+    expect(after?.periodMonth).toBe(month);
+    expect(Number(after?.spentAmount)).toBe(0);
   });
 });
