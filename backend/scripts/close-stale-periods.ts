@@ -15,10 +15,17 @@
 // Usage:
 //   npx tsx scripts/close-stale-periods.ts                       # dry run (default, no writes)
 //   npx tsx scripts/close-stale-periods.ts --write --db=<dbname>    # actually writes
+//   npx tsx scripts/close-stale-periods.ts --skip=a@x.com,b@x.com  # exclude specific users
 //
 // --db=<dbname> must match the database name in DATABASE_URL exactly — same
 // guard as backfill-period-spend.ts, the only thing standing between a
 // copy-pasted command and writing to the wrong database.
+//
+// --skip=<email1,email2,...> excludes those users entirely (dry run and
+// write both) — use this for a user whose data needs a manual correction
+// first (e.g. a pre-existing zero-based invariant violation from an
+// unrelated bug) so the close doesn't run against their still-wrong numbers
+// before that correction lands. Re-run without --skip once they're fixed.
 //
 // Dry run reuses the real close logic (RESET pool math included) inside an
 // actual DB transaction that gets rolled back instead of committed — not a
@@ -40,6 +47,12 @@ async function main() {
   const args = process.argv.slice(2);
   const write = args.includes('--write');
   const dbArg = args.find((a) => a.startsWith('--db='))?.slice('--db='.length);
+  const skipEmails = new Set(
+    (args.find((a) => a.startsWith('--skip='))?.slice('--skip='.length) ?? '')
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean),
+  );
 
   const rawUrl = process.env.DATABASE_URL ?? '';
   const actualDbName = parseDbNameFromUrl(rawUrl);
@@ -62,8 +75,19 @@ async function main() {
     }
   }
 
+  if (skipEmails.size > 0) {
+    console.log(`Skipping: ${[...skipEmails].join(', ')}`);
+  }
+
   const budgetService = new BudgetService();
-  const users = await prisma.user.findMany({ select: { id: true, email: true } });
+  const allUsers = await prisma.user.findMany({ select: { id: true, email: true } });
+  const users = allUsers.filter((u) => !skipEmails.has(u.email.toLowerCase()));
+  const skippedCount = allUsers.length - users.length;
+  if (skipEmails.size > skippedCount) {
+    console.log(
+      `Warning: ${skipEmails.size - skippedCount} email(s) in --skip matched no user — check for typos.`,
+    );
+  }
 
   let usersChanged = 0;
   let budgetMonthsClosed = 0;
@@ -88,7 +112,8 @@ async function main() {
 
   console.log(
     `\n${usersChanged} user(s) / ${budgetMonthsClosed} budget-month(s) ${write ? 'closed' : 'would be closed'}, ` +
-      `${users.length - usersChanged} user(s) already current.`,
+      `${users.length - usersChanged} user(s) already current` +
+      (skippedCount > 0 ? `, ${skippedCount} user(s) skipped.` : '.'),
   );
 }
 
