@@ -344,8 +344,20 @@ Archived budget: ข้ามอัตโนมัติฟรี ไม่ต�
 1. ✅ badge policy บน budget card ขึ้นถูกต้อง (`🔄 รีเซ็ตรายเดือน`) — ยืนยันผ่าน browser automation บน production จริง (admin session, `budgetflow-kohl.vercel.app/budgets`)
 2. ✅ ROLLOVER radio ใน `BudgetForm.tsx` disabled กดไม่ติดจริงบน production build — คลิกตรง radio แล้วยัง RESET selected เหมือนเดิม ยืนยันแล้ว
 3. ✅ `monthlyTarget` field โผล่เมื่อเลือก RESET เท่านั้น ซ่อนถูกต้องเมื่อสลับไป SWEEP — ยืนยันแล้ว
-4. ❌ **ยังไม่เคยเทส** — บันทึก transaction ปกติ (วันที่ปัจจุบัน, ไม่ backdate) ต้อง**ไม่**โดน closed-period guard บล็อก — คนละข้อกับข้อ 5 ด้านล่าง อย่าเข้าใจผิดว่าถูกรวมทดสอบไปแล้ว ยังเป็นความเสี่ยงเดิม (guard ใหม่ ยังไม่เคยเจอ production traffic จริงในเส้นทางนี้ ถ้าพลาดจะบล็อกผู้ใช้จริงบันทึกรายการไม่ได้เลย)
-5. ⏳ mobile viewport จริง (390px) — user รับไปเทสเองบนโทรศัพท์จริงแยกต่างหาก (2026-09-05) **ยังไม่รายงานผลกลับมา** — ค้างมาตั้งแต่ Phase 2 (`BorrowBudgetModal`/split detail line)
+4. ✅ บันทึก transaction ปกติ (วันที่ปัจจุบัน, ไม่ backdate) ต้อง**ไม่**โดน closed-period guard บล็อก — ทดสอบจริงบน production ผ่าน demo user (2026-09-05): EXPENSE ฿200 วันที่ 05 Sep 2026 เข้า Entertainment budget สำเร็จ ("Transaction added", ไม่มี `PERIOD_CLOSED`), `spentAmount` 0→200 / account balance ลดลงตรง 200 ยืนยันจาก DB โดยตรง
+5. ⏳ mobile viewport จริง (390px) — user รับไปเทสเองบนโทรศัพท์จริงแยกต่างหาก (2026-09-05) **ยังไม่รายงานผลกลับมา** — ค้างมาตั้งแต่ Phase 2 (`BorrowBudgetModal`/split detail line) — **นี่คือข้อเดียวที่เหลือค้างของ Phase 3**
+
+**สรุป Phase 3**: ปิดสมบูรณ์ในเชิง logic ครบทุกข้อ (1-4 ผ่านหมดบน production จริง) เหลือแค่ข้อ 5 (mobile viewport) รอผลจากผู้ใช้
+
+### Demo login incident (2026-09-05) — เจอระหว่างเทสข้อ 4 ด้านบน
+
+**อาการ**: `demo@budgetflow.app` / `Password123!` (public credential ที่หน้า login เองโชว์ hint) login ไม่ได้บน production เลย — backend ตอบ `401 {"message":"Invalid credentials"}` ตรงๆ (ยืนยันด้วย curl ตรง ไม่ใช่ browser/autofill artifact, ไม่ใช่ rate limit — `ratelimit-remaining: 91/100`)
+
+**Root cause**: `demo@budgetflow.app` **ไม่เคยถูกสร้างบน Neon production เลย** — เช็ค `users` table (email/role/createdAt เท่านั้น ไม่ดู password) เจอแค่ 3 คน: chom, admin, mindmint ไม่มี demo `seed.ts`'s `seedDemo()` เขียนถูกต้องสมบูรณ์มาตั้งแต่แรก (upsert by email, role USER, sample budget/transaction ของตัวเอง, ไม่แตะ user อื่นเลย) — **แค่ไม่เคยถูกรันกับ Neon นี้จริงๆ**
+
+**Fix**: รัน `npm run db:seed` กับ Neon สำเร็จ — ตรวจ `seedAdmin()`/`seedDemo()` ทั้งคู่ก่อนรันแล้วว่า upsert key เป็น exact email match, budget/importRule scope ด้วย `userId` เท่านั้น ไม่มี query กวาดทั้งตาราง — ยืนยันหลังรันว่า chom/admin/mindmint **ไม่กระทบแม้แต่ field เดียว** demo user ใช้งานได้ปกติทันที (login, dashboard, สร้าง budget, บันทึก transaction ครบ)
+
+**บทเรียน**: หลังทำ major schema change หรือ migration ใหญ่ (เช่น Phase 3 monthly reset) ควรเช็ค public-facing account (demo) ว่ายัง login/ใช้งานได้จริงด้วย ไม่ใช่แค่เช็คว่า schema/business-logic ถูก — demo account หลุดจาก Neon (น่าจะตั้งแต่ก่อน Phase 3 ด้วยซ้ำ ไม่มีใครสังเกตเพราะ session ทำงานส่วนใหญ่ผ่าน admin/chom/mindmint ที่ login ค้างอยู่แล้วในเครื่อง ไม่เคย login ใหม่จริงๆ) ค้างมานานโดยไม่มีใครรู้จนกว่าจะพยายาม test path นี้ตรงๆ
 
 ### Neon connection ตายจาก scale-to-zero — retry fix (2026-08-21)
 
