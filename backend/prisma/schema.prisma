@@ -44,6 +44,7 @@ model User {
   recurringTransactions RecurringTransaction[]
   notifications         Notification[]
   budgetMonthlyHistory  BudgetMonthlyHistory[]
+  budgetSessions        BudgetSession[]
   ownedHouseholds       Household[]            @relation("HouseholdOwner")
   householdMembership   HouseholdMember?
   actedTransactions     Transaction[]          @relation("TransactionActor")
@@ -87,15 +88,16 @@ model Budget {
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
-  user                  User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions          Transaction[]
-  transfersFrom         Transfer[]              @relation("TransferFrom")
-  transfersTo           Transfer[]              @relation("TransferTo")
+  transfersFrom         Transfer[]             @relation("TransferFrom")
+  transfersTo           Transfer[]             @relation("TransferTo")
   importRules           ImportRule[]
   allocations           Allocation[]
   recurringTransactions RecurringTransaction[]
   splits                TransactionSplit[]
   monthlyHistory        BudgetMonthlyHistory[]
+  sessions              BudgetSession[]
 
   @@map("budgets")
 }
@@ -127,6 +129,45 @@ model BudgetMonthlyHistory {
   @@map("budget_monthly_history")
 }
 
+enum SessionStatus {
+  OPEN
+  CLOSED
+}
+
+// One row per budget per calendar month — replaces the in-place overwrite of
+// Budget.allocatedAmount/spentAmount/periodYear/periodMonth. Exactly one OPEN
+// row per budget at any time; enforced by a partial unique index added by
+// hand to the migration SQL (Prisma has no partial-unique-index syntax):
+//   CREATE UNIQUE INDEX "budget_sessions_one_open_per_budget"
+//     ON "budget_sessions" ("budgetId") WHERE "status" = 'OPEN';
+// Additive-only for now: Budget still carries its own
+// allocatedAmount/spentAmount/periodYear/periodMonth and BudgetMonthlyHistory
+// is untouched — this table is populated by a one-time data-migration script
+// and read by nothing yet. Dropping the old columns/table is a separate,
+// later migration once that backfill is verified.
+model BudgetSession {
+  id              String         @id @default(cuid())
+  budgetId        String
+  userId          String
+  periodYear      Int
+  periodMonth     Int
+  allocatedAmount Decimal        @default(0) @db.Decimal(15, 2)
+  spentAmount     Decimal        @default(0) @db.Decimal(15, 2)
+  rolloverPolicy  RolloverPolicy // snapshot of Budget.rolloverPolicy when this session opened — a later policy change must not reinterpret an already-closed period.
+  status          SessionStatus  @default(OPEN)
+  closedAt        DateTime?
+  createdAt       DateTime       @default(now())
+
+  budget       Budget        @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@unique([budgetId, periodYear, periodMonth])
+  @@index([budgetId, status])
+  @@index([userId, periodYear, periodMonth])
+  @@map("budget_sessions")
+}
+
 // Records each income allocation event (distributing income into buckets)
 model Allocation {
   id        String   @id @default(cuid())
@@ -143,23 +184,25 @@ model Allocation {
 }
 
 model Transaction {
-  id           String          @id @default(cuid())
-  userId       String
-  accountId    String
-  budgetId     String?
-  amount       Decimal         @db.Decimal(15, 2)
-  type         TransactionType
-  description  String
-  date         DateTime
-  importFileId String?
-  isImported   Boolean         @default(false)
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  id              String          @id @default(cuid())
+  userId          String
+  accountId       String
+  budgetId        String?
+  budgetSessionId String?
+  amount          Decimal         @db.Decimal(15, 2)
+  type            TransactionType
+  description     String
+  date            DateTime
+  importFileId    String?
+  isImported      Boolean         @default(false)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
-  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  account    Account     @relation(fields: [accountId], references: [id])
-  budget     Budget?     @relation(fields: [budgetId], references: [id])
-  importFile ImportFile? @relation(fields: [importFileId], references: [id])
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account       Account        @relation(fields: [accountId], references: [id])
+  budget        Budget?        @relation(fields: [budgetId], references: [id])
+  budgetSession BudgetSession? @relation(fields: [budgetSessionId], references: [id])
+  importFile    ImportFile?    @relation(fields: [importFileId], references: [id])
 
   actorUserId         String?
   linkedTransactionId String?      @unique
@@ -172,6 +215,7 @@ model Transaction {
   @@index([userId, date])
   @@index([userId, type])
   @@index([budgetId])
+  @@index([budgetSessionId])
   @@index([actorUserId])
   @@map("transactions")
 }
