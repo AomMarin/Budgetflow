@@ -340,12 +340,12 @@ Archived budget: ข้ามอัตโนมัติฟรี ไม่ต�
 
 **สถานะ (อัปเดต 2026-08-16 ปลาย session)**: เขียนโค้ดครบตาม design นี้แล้ว, commit `12b2a7f` — **push ขึ้น `origin/main` แล้ว** (`git log origin/main..HEAD` ว่าง, ยืนยันหลัง fetch). Migration `20260816000000_add_monthly_reset_rollover` **apply กับ Neon production สำเร็จแล้ว** — ตรวจแล้ว 21 budgets ทุกตัวเข้า `rolloverPolicy=RESET` (default), `periodYear/periodMonth=2026/8`, `monthlyTarget=null` ตรงตามที่คาดหลัง migration (ยังไม่มีใครตั้งค่าเอง). Backfill script รัน dry-run กับ Neon แล้ว: **0 changes, 21/21 already correct** — `spentAmount` เดิมของทุก budget ตรงกับยอดใช้จริงเดือนปัจจุบันอยู่แล้ว (เดือนแรกหลัง deploy ไม่มี transaction เก่าข้ามเดือนมาปน) จึง **ไม่ต้องรัน `--write`** เลย.
 
-**ยังไม่ได้ทดสอบบน production จริง** (ทดสอบแค่ local dev browser ก่อนหน้านี้) — session หน้าต้องเทสบน production ให้ครบก่อนถือว่า Phase 3 เสร็จจริง:
-1. badge policy บน budget card ขึ้นถูกต้อง (`🔄 รีเซ็ตรายเดือน` เป็นต้น)
-2. ROLLOVER radio ใน `BudgetForm.tsx` disabled กดไม่ติดจริงบน production build (ไม่ใช่แค่ dev server)
-3. `monthlyTarget` field โผล่เมื่อเลือก RESET เท่านั้น ซ่อนถูกต้องเมื่อสลับ policy อื่น
-4. **สำคัญสุด**: บันทึก transaction ปกติ (วันที่ปัจจุบัน, ไม่ backdate) ต้อง**ไม่**โดน closed-period guard บล็อก — เพราะ guard เพิ่งเขียนใหม่ ยังไม่เคยเจอ production data/traffic จริง ถ้าพลาดจะบล็อกผู้ใช้จริงบันทึกรายการไม่ได้เลย
-5. mobile viewport จริง (390px) — ค้างมาตั้งแต่ Phase 2 (`BorrowBudgetModal`/split detail line) ยังไม่เคยเห็นด้วยตาบน production เช่นกัน ควรเทสพร้อมกันคราวเดียว
+**Production smoke test ผลถึง 2026-09-05:**
+1. ✅ badge policy บน budget card ขึ้นถูกต้อง (`🔄 รีเซ็ตรายเดือน`) — ยืนยันผ่าน browser automation บน production จริง (admin session, `budgetflow-kohl.vercel.app/budgets`)
+2. ✅ ROLLOVER radio ใน `BudgetForm.tsx` disabled กดไม่ติดจริงบน production build — คลิกตรง radio แล้วยัง RESET selected เหมือนเดิม ยืนยันแล้ว
+3. ✅ `monthlyTarget` field โผล่เมื่อเลือก RESET เท่านั้น ซ่อนถูกต้องเมื่อสลับไป SWEEP — ยืนยันแล้ว
+4. ❌ **ยังไม่เคยเทส** — บันทึก transaction ปกติ (วันที่ปัจจุบัน, ไม่ backdate) ต้อง**ไม่**โดน closed-period guard บล็อก — คนละข้อกับข้อ 5 ด้านล่าง อย่าเข้าใจผิดว่าถูกรวมทดสอบไปแล้ว ยังเป็นความเสี่ยงเดิม (guard ใหม่ ยังไม่เคยเจอ production traffic จริงในเส้นทางนี้ ถ้าพลาดจะบล็อกผู้ใช้จริงบันทึกรายการไม่ได้เลย)
+5. ⏳ mobile viewport จริง (390px) — user รับไปเทสเองบนโทรศัพท์จริงแยกต่างหาก (2026-09-05) **ยังไม่รายงานผลกลับมา** — ค้างมาตั้งแต่ Phase 2 (`BorrowBudgetModal`/split detail line)
 
 ### Neon connection ตายจาก scale-to-zero — retry fix (2026-08-21)
 
@@ -365,6 +365,34 @@ Archived budget: ข้ามอัตโนมัติฟรี ไม่ต�
 `channel_binding=require → prefer` เพราะสงสัยว่า pooled-endpoint negotiation อาจ inconsistent ช่วง backend connection ใหม่ (plausible ไม่ใช่ยืนยัน) ที่เหลือคือ Prisma pool tuning มาตรฐานสำหรับ Neon pooled + Render free tier (1 instance) — **ต้องแก้ 2 ที่พร้อมกันเสมอ**: Render env var **และ** GitHub Actions secret `DATABASE_URL` (ตัว `.github/workflows/daily-job.yml` ใช้แยกจาก Render คนละ credential store)
 
 **ยังไม่ยืนยัน**: retry เคยทำงานจริงหรือยัง — ยังไม่เจอเคส `kind: Closed` เกิดขึ้นอีกหลัง deploy เพื่อพิสูจน์ วิธีเช็ครอบหน้า: หา log `db-retry: operation failed` ใน Render — เห็น `attempt: 1` แล้ว request สำเร็จต่อ = retry ทำงานถูก, ไม่เห็น log นี้เลยแต่ error รัวๆ = error class จริงไม่ตรง allowlist ต้องกลับมาแก้ `isRetryableConnectionError()`
+
+### mindmint@budgetflow.app incident — historical data closure (2026-09-05)
+
+เดือนสิงหาคมของ mindmint ปิดถูกต้องแล้วจริงผ่าน lazy hook (ไม่ใช่บั๊ก — ทำงานตามออกแบบ) ยืนยันจาก `BudgetMonthlyHistory` snapshot ตรงกับตัวเลขจริงทุกตัว invariant ปัจจุบัน (Σremaining 5000 ≤ balance 13000) ไม่พัง
+
+ปัญหาที่เหลือคือ historical เท่านั้น: 2 transaction ก่อนแก้บั๊ก EXPENSE-ไม่มี-budgetId (`7bcc4f6`) — "ค่าติ๊กต๊อก" 800 กับ "ค่าคีบอร์ด" 281.25 (สิงหาคม) — มี `budgetId: null` ตั้งแต่แรก แก้ด้วย `backend/scripts/attribute-mindmint-legacy-transactions.ts`: ตั้ง `budgetId` ชี้ไป "ค่ากิน" (budget ที่ remaining เยอะสุดตอนนั้น) **เฉยๆ ไม่แตะ `spentAmount` เลย** (ปัจจุบันหรือ history) เพราะสิงหาคมปิดไปแล้ว เติม spentAmount ตอนนี้จะกลายเป็นยัดยอดสิงหาคมปนเข้ากันยาที่ถูกต้องอยู่แล้ว รัน dry-run แล้ว `--write` จริงกับ Neon แล้ว (2 transaction updated) — August `BudgetMonthlyHistory` correction (ทำให้รายงานย้อนหลังครบ 100%) **backlog ไว้ ตัดสินใจแล้วว่าไม่จำเป็นเร่งด่วน**
+
+`backend/scripts/close-stale-periods.ts` เพิ่ม `--skip=<emails>` (คอมมิทเดียวกับข้างบน) — กันไม่ให้ปิดเดือนทับ user ที่ข้อมูลผิดอยู่ก่อนแก้ ใช้ตอนแก้ mindmint จริง
+
+### Session-based Budget Model — Schema Phase เสร็จแล้ว (2026-09-05)
+
+ต่อจาก "Design Doc Draft: Budget Session/Period Model" (ร่างไว้ท้าย Phase 3) — ปัญหาที่ทำให้ตัดสินใจทำ: in-place overwrite ของ `Budget.allocatedAmount/spentAmount/periodYear/periodMonth` ไม่มีทางรู้ว่า "ลืม reset" (แบบที่เกือบเจอกับ cron ที่ไม่เคยถูกเรียก, `9330fa0`) เพราะ row เดิมโดนเขียนทับเงียบๆ ไม่มีร่องรอย
+
+**Schema เสร็จแล้ว, additive ล้วน** (commit `1fad1ab`, push แล้ว):
+- Model `BudgetSession` ใหม่ (หนึ่งแถวต่อ budget ต่อเดือน, `status` OPEN/CLOSED) + partial unique index มือ `budget_sessions_one_open_per_budget` (WHERE status='OPEN') กัน 2 แถว OPEN พร้อมกันต่อ budget เดียว
+- `Transaction` เพิ่ม `budgetSessionId` (nullable ถาวร เหมือน `budgetId` เดิม — INCOME ไม่มี session) — `budgetId` เดิมยังอยู่ครบไม่แตะ
+- `Budget` **ยังไม่ตัด** 4 field เดิมออก (`allocatedAmount/spentAmount/periodYear/periodMonth`) — ตัดเป็น migration แยกทีหลัง หลัง verify backfill แล้วเท่านั้น
+- `backend/scripts/migrate-budget-sessions.ts` (dry-run default, `--write --db=` guard) backfill จาก `Budget` (ปัจจุบัน→OPEN) + `BudgetMonthlyHistory` (ปิดแล้ว→CLOSED)
+
+**ทดสอบแล้ว** — dev DB (24 sessions, 12 budget+12 history) และ test DB (304 sessions, 98 budget+206 history รวมเคสปิดข้ามหลายเดือนต่อ budget เดียว) ทั้งคู่ idempotent, row count ตรง, `npm run test` backend 66/66 ผ่าน. เจอ 2 edge case ด้วยเคสเทียม (สร้าง-ทดสอบ-ลบทิ้งใน dev DB):
+- **Archived budget** → ตั้งใจ insert เป็น **CLOSED** ไม่ใช่ OPEN (ถ้าเป็น OPEN จะค้างตลอดไปเพราะ `findAll`/`closeAndAdvancePeriodsForUser` ไม่เห็น archived budget เลย ไม่มีวันปิดให้ — เสี่ยงไปโผล่ query "current open sessions" ในเฟสหน้า) `closedAt` เป็น null เพราะ archive ไม่ใช่ month-close event จริง
+- **Stale-period budget** (period เก่ากว่าปัจจุบัน, lazy hook ยังไม่ทัน) → **ตั้งใจปล่อย OPEN ที่ period เดิม** ไม่แก้ ให้เฟสหน้า (session-aware `closeAndAdvancePeriodsForUser`) ไล่ปิดตามปกติ เพราะเป็น normal case ของ lazy-close อยู่แล้ว ไม่ใช่บั๊กที่ script ต้องช่วยแก้เอง (เขียน logic ปิดซ้ำในนี้เสี่ยง drift จากของจริง)
+
+**Neon production ยังไม่แตะเลย** — table ไม่มีบน prod, ไม่มีโค้ดอ่านมันเลยด้วย deploy ปลอดภัย 100%
+
+**Known gap ที่เจอระหว่างทาง (มีอยู่ก่อน session-based ด้วยซ้ำ ไม่ใช่ regression ใหม่)**: `transfer.service.ts create()` และ `pool.service.ts contribute()` bypass closed-period guard อยู่ตอนนี้ (transfer ไม่มี `date` field ไม่เคยผูกกับ guard เลย; `contribute()` ข้าม `TransactionService` เลยไม่เคยเรียก `assertBudgetsPeriodOpen`) — เงินเข้า/ออกเดือนที่ปิดไปแล้วได้เงียบๆ โดยไม่มีใครเช็ค รูปแบบเดียวกับช่องโหว่ mindmint EXPENSE-ไม่มี-budgetId เก่า แค่ยังไม่มีใครเจอจริง **ต้องปิดพร้อมกับ rewrite `period-guard.ts` ใน implementation phase หน้า ไม่ใช่ทำเผื่อทีหลัง** — รายละเอียดเต็มอยู่ใน plan doc `merry-bubbling-rabbit.md` (punch list ท้ายไฟล์)
+
+**ขั้นต่อไป (ยังไม่เริ่ม)**: (1) apply migration + data-migration script กับ Neon จริง, (2) implementation phase — rewrite ~10 call site ที่เขียน `spentAmount`/`allocatedAmount` ตรงๆ ผ่าน `Budget` ให้ไปใช้ `BudgetSession` แทน (ดู punch list เต็มใน plan doc)
 
 ### Phase 5 — ตั้งวันรีเซ็ตเอง (บันทึกไว้ 2026-08-16, ยังไม่เริ่มออกแบบ)
 
