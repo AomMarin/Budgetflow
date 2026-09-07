@@ -400,11 +400,15 @@ Archived budget: ข้ามอัตโนมัติฟรี ไม่ต�
 - **Archived budget** → ตั้งใจ insert เป็น **CLOSED** ไม่ใช่ OPEN (ถ้าเป็น OPEN จะค้างตลอดไปเพราะ `findAll`/`closeAndAdvancePeriodsForUser` ไม่เห็น archived budget เลย ไม่มีวันปิดให้ — เสี่ยงไปโผล่ query "current open sessions" ในเฟสหน้า) `closedAt` เป็น null เพราะ archive ไม่ใช่ month-close event จริง
 - **Stale-period budget** (period เก่ากว่าปัจจุบัน, lazy hook ยังไม่ทัน) → **ตั้งใจปล่อย OPEN ที่ period เดิม** ไม่แก้ ให้เฟสหน้า (session-aware `closeAndAdvancePeriodsForUser`) ไล่ปิดตามปกติ เพราะเป็น normal case ของ lazy-close อยู่แล้ว ไม่ใช่บั๊กที่ script ต้องช่วยแก้เอง (เขียน logic ปิดซ้ำในนี้เสี่ยง drift จากของจริง)
 
-**Neon production ยังไม่แตะเลย** — table ไม่มีบน prod, ไม่มีโค้ดอ่านมันเลยด้วย deploy ปลอดภัย 100%
-
 **Known gap ที่เจอระหว่างทาง (มีอยู่ก่อน session-based ด้วยซ้ำ ไม่ใช่ regression ใหม่)**: `transfer.service.ts create()` และ `pool.service.ts contribute()` bypass closed-period guard อยู่ตอนนี้ (transfer ไม่มี `date` field ไม่เคยผูกกับ guard เลย; `contribute()` ข้าม `TransactionService` เลยไม่เคยเรียก `assertBudgetsPeriodOpen`) — เงินเข้า/ออกเดือนที่ปิดไปแล้วได้เงียบๆ โดยไม่มีใครเช็ค รูปแบบเดียวกับช่องโหว่ mindmint EXPENSE-ไม่มี-budgetId เก่า แค่ยังไม่มีใครเจอจริง **ต้องปิดพร้อมกับ rewrite `period-guard.ts` ใน implementation phase หน้า ไม่ใช่ทำเผื่อทีหลัง** — รายละเอียดเต็มอยู่ใน plan doc `merry-bubbling-rabbit.md` (punch list ท้ายไฟล์)
 
-**ขั้นต่อไป (ยังไม่เริ่ม)**: (1) apply migration + data-migration script กับ Neon จริง, (2) implementation phase — rewrite ~10 call site ที่เขียน `spentAmount`/`allocatedAmount` ตรงๆ ผ่าน `Budget` ให้ไปใช้ `BudgetSession` แทน (ดู punch list เต็มใน plan doc)
+**Data migration phase เสร็จสมบูรณ์บน Neon production แล้ว (2026-09-07)**: migration `20260905015648_add_budget_session` apply สำเร็จ (ยืนยัน additive-only ทุกบรรทัด — ไม่มี DROP/ALTER TYPE/NOT NULL) + `migrate-budget-sessions.ts --write` รันสำเร็จ 48/48 session (26 current + 22 history), 0 conflicts, row count verify ผ่าน (คลุม 4 user จริงบน prod: chom/admin/mindmint/demo) — dry-run ก่อนตรวจ checklist ครบ (mindmint OPEN period 2026-09 ถูกต้อง, demo ไม่มี history ตรงตามคาด, เจอ policy=SWEEP 1 ตัวยืนยัน script อ่าน policy จริงไม่ hardcode)
+
+**Production ตอนนี้ยังทำงานด้วย `Budget` field เดิมทั้งหมด** (`allocatedAmount`/`spentAmount`/`periodYear`/`periodMonth`) — `budget_sessions` table มีข้อมูลครบแล้วบน Neon แต่**ยังไม่มีโค้ดไหนอ่านมันเลย** ยังไม่กระทบ runtime ใดๆ
+
+**ห้าม** drop `BudgetMonthlyHistory` table หรือ 4 column เดิมบน `Budget` จนกว่า implementation phase จะ rewrite ~10 call site ครบและ verify เสร็จสมบูรณ์ก่อน (ตาม plan doc ระบุไว้ชัดว่าต้องเป็น migration แยกทีหลัง ไม่รวมกับตอนนี้)
+
+**ขั้นต่อไป (ยังไม่เริ่ม)**: implementation phase — rewrite ~10 call site ที่เขียน `spentAmount`/`allocatedAmount` ตรงๆ ผ่าน `Budget` ให้ไปใช้ `BudgetSession` แทน (ดู punch list เต็มใน plan doc `merry-bubbling-rabbit.md`)
 
 ### Phase 5 — ตั้งวันรีเซ็ตเอง (บันทึกไว้ 2026-08-16, ยังไม่เริ่มออกแบบ)
 
