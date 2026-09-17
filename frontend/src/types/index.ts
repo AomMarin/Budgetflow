@@ -105,6 +105,16 @@ export interface ImportRule {
   budget: Pick<Budget, 'id' | 'name' | 'icon' | 'color'>;
 }
 
+// Month-switcher bound info — always reflects the period actually served
+// (which may differ from what was requested only in that a future period is
+// rejected server-side before this is ever built).
+export interface PeriodMeta {
+  year: number;
+  month: number;
+  hasPrevious: boolean;
+  isCurrent: boolean;
+}
+
 export interface DashboardData {
   totalBalance: number;
   totalBudget: number;
@@ -115,6 +125,7 @@ export interface DashboardData {
   budgets: Budget[];
   recentTransactions: Transaction[];
   alerts: (Budget & { usagePercent: number })[];
+  period: PeriodMeta;
 }
 
 export type NotificationType = 'BUDGET_ALERT' | 'RECURRING_PROCESSED';

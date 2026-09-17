@@ -10,19 +10,23 @@ import {
 } from 'recharts';
 import { useDashboard } from '@/hooks/useDashboard';
 import { useAuthStore } from '@/stores/auth.store';
-import { formatCurrency, formatDate } from '@/utils/format';
+import { formatCurrency, formatDate, MONTH_NAMES } from '@/utils/format';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { CardSkeleton } from '@/components/ui/Skeleton';
+import { MonthSwitcher } from '@/components/ui/MonthSwitcher';
 import { AllocateIncomeModal } from '../budgets/AllocateIncomeModal';
 import { useProcessRecurring } from '@/hooks/useRecurring';
 
 export function DashboardPage() {
-  const { data, isLoading } = useDashboard();
+  const now = new Date();
+  const [period, setPeriod] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
+  const { data, isLoading } = useDashboard(period);
   const { user } = useAuthStore();
   const [showAllocate, setShowAllocate] = useState(false);
   const processRecurring = useProcessRecurring();
+  const isPastMonth = data ? !data.period.isCurrent : false;
 
   // Auto-process recurring transactions on dashboard load
   useEffect(() => {
@@ -48,18 +52,43 @@ export function DashboardPage() {
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Greeting */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">
             Hello, {user?.name?.split(' ')[0]} 👋
           </h2>
           <p className="text-sm text-gray-500 mt-0.5">Here's your financial overview</p>
         </div>
-        <Button onClick={() => setShowAllocate(true)} icon={<Plus className="w-4 h-4" />} className="shrink-0">
-          <span className="hidden sm:inline">Allocate Income</span>
-          <span className="sm:hidden">รับเงิน</span>
-        </Button>
+        <div className="flex items-center gap-3 shrink-0">
+          <MonthSwitcher
+            year={period.year}
+            month={period.month}
+            hasPrevious={data?.period.hasPrevious ?? false}
+            hasNext={isPastMonth}
+            onChange={(year, month) => setPeriod({ year, month })}
+          />
+          <Button
+            onClick={() => setShowAllocate(true)}
+            icon={<Plus className="w-4 h-4" />}
+            disabled={isPastMonth}
+            title={isPastMonth ? 'แก้ไขได้เฉพาะเดือนปัจจุบันเท่านั้น' : undefined}
+          >
+            <span className="hidden sm:inline">Allocate Income</span>
+            <span className="sm:hidden">รับเงิน</span>
+          </Button>
+        </div>
       </div>
+
+      {/* Read-only past-month banner — always visible (not hover-only), since
+          hover doesn't work on mobile. */}
+      {isPastMonth && (
+        <div className="card p-4 border-l-4 border-amber-400 bg-amber-50 dark:bg-amber-900/10 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            กำลังดูข้อมูลย้อนหลังเดือน {MONTH_NAMES[period.month - 1]} {period.year} — แก้ไขได้เฉพาะเดือนปัจจุบันเท่านั้น
+          </p>
+        </div>
+      )}
 
       {/* Budget Alerts */}
       {data.alerts.length > 0 && (

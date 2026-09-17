@@ -37,6 +37,15 @@ export interface BudgetWithStats extends Budget {
   alertLevel: '80' | '90' | '100' | null;
 }
 
+export interface PeriodMeta {
+  year: number;
+  month: number;
+  hasPrevious: boolean;
+  isCurrent: boolean;
+}
+
+type SessionWithBudget = Prisma.BudgetSessionGetPayload<{ include: { budget: true } }>;
+
 export class BudgetService {
   constructor(private readonly repo = new BudgetRepository()) {}
 
@@ -51,6 +60,65 @@ export class BudgetService {
     if (!budget) throw Object.assign(new Error('Budget not found'), { status: 404 });
     return this.addStats(budget);
   }
+
+  // Month-switcher read path — additive, sits alongside getAll() rather than
+  // replacing it (getAll() is still called internally by pool.service.ts and
+  // reports.service.ts and must keep returning live Budget-column data
+  // unconditionally). The *current* period still reads Budget's own columns
+  // exactly like getAll() does; only a past period reads BudgetSession. See
+  // C:\Users\ammar\.claude\plans\linear-honking-hamming.md.
+  async getForPeriod(
+    userId: string,
+    year: number,
+    month: number,
+  ): Promise<{ budgets: BudgetWithStats[]; period: PeriodMeta }> {
+    // Keep the live period fresh regardless of what's being viewed — same
+    // lazy-close hook every other budget read already runs first.
+    await this.closeAndAdvancePeriodsForUser(userId);
+
+    const current = getBangkokYearMonth();
+    const requested: YearMonth = { year, month };
+    if (isBeforeYearMonth(current, requested)) {
+      throw Object.assign(new Error('ยังไม่ถึงเดือนนี้'), { status: 400 });
+    }
+
+    const isCurrent = year === current.year && month === current.month;
+    const budgets = isCurrent
+      ? (await this.repo.findAll(userId)).map(this.addStats)
+      : (await this.repo.findAllForPeriod(userId, year, month)).map(this.mapSessionToBudget);
+    const hasPrevious = await this.repo.hasSessionBefore(userId, year, month);
+
+    return { budgets, period: { year, month, hasPrevious, isCurrent } };
+  }
+
+  // Thin proxy so DashboardService can compute the same period-switcher
+  // bound for the current-period branch without duplicating getForPeriod's
+  // future-period/isCurrent logic just to reach this one query.
+  async hasPreviousPeriod(userId: string, year: number, month: number): Promise<boolean> {
+    return this.repo.hasSessionBefore(userId, year, month);
+  }
+
+  // BudgetSession row -> the same BudgetWithStats shape addStats() produces,
+  // so the frontend never has to branch between a live and historical
+  // response. rolloverPolicy comes from the session (the policy snapshot at
+  // the time that period was open), not the budget's current policy, which
+  // may have changed since. name/icon/color/isArchived/sortOrder/
+  // monthlyTarget/createdAt aren't period-scoped — they always reflect the
+  // budget's current config, same as every other historical view in this
+  // app (BudgetMonthlyHistory-backed reports never snapshotted these either).
+  private mapSessionToBudget = (session: SessionWithBudget): BudgetWithStats => {
+    const allocatedAmount = Number(session.allocatedAmount);
+    const spentAmount = Number(session.spentAmount);
+    return {
+      ...session.budget,
+      allocatedAmount: session.allocatedAmount,
+      spentAmount: session.spentAmount,
+      rolloverPolicy: session.rolloverPolicy,
+      periodYear: session.periodYear,
+      periodMonth: session.periodMonth,
+      ...computeBudgetStats(allocatedAmount, spentAmount),
+    };
+  };
 
   // Per-user mutex for the Sigma(allocated) <= Sigma(balance) invariant check.
   // Row-level FOR UPDATE on the existing budgets/accounts can't guard this by

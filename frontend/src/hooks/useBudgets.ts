@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { api } from '../services/api';
-import { Budget } from '../types';
+import { Budget, PeriodMeta } from '../types';
 
 export const BUDGETS_KEY = ['budgets'];
 
@@ -11,6 +11,22 @@ export function useBudgets() {
     queryFn: async (): Promise<Budget[]> => {
       const res = await api.get('/budgets');
       return res.data.data.budgets;
+    },
+  });
+}
+
+// Month-switcher read — sibling to useBudgets(), not a replacement. Every
+// other consumer of useBudgets() (forms, dropdowns, filters) wants "current
+// budgets," not a period concept, so that hook is left untouched. Query key
+// falls under the same ['budgets', ...] prefix, so the mutation hooks below
+// already invalidate it via their existing BUDGETS_KEY invalidation (React
+// Query prefix-matches by default).
+export function useBudgetsForPeriod(year: number, month: number) {
+  return useQuery({
+    queryKey: [...BUDGETS_KEY, year, month],
+    queryFn: async (): Promise<{ budgets: Budget[]; period: PeriodMeta }> => {
+      const res = await api.get('/budgets', { params: { year, month } });
+      return res.data.data;
     },
   });
 }

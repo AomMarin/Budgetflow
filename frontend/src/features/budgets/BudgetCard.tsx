@@ -15,10 +15,12 @@ export function BudgetCard({
   budget,
   onEdit,
   onDelete,
+  readOnly = false,
 }: {
   budget: Budget;
   onEdit: () => void;
   onDelete: () => void;
+  readOnly?: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -66,45 +68,47 @@ export function BudgetCard({
         </div>
 
         {/* Menu */}
-        <div ref={menuRef} className="relative">
-          <button
-            onClick={() => setMenuOpen((v) => !v)}
-            className="p-1.5 rounded-lg text-gray-300 dark:text-gray-600
-                       hover:text-gray-600 dark:hover:text-gray-300
-                       hover:bg-gray-100 dark:hover:bg-gray-800
-                       opacity-0 group-hover:opacity-100 transition-all"
-            aria-label="เมนู"
-          >
-            <MoreVertical className="w-4 h-4" />
-          </button>
+        {!readOnly && (
+          <div ref={menuRef} className="relative">
+            <button
+              onClick={() => setMenuOpen((v) => !v)}
+              className="p-1.5 rounded-lg text-gray-300 dark:text-gray-600
+                         hover:text-gray-600 dark:hover:text-gray-300
+                         hover:bg-gray-100 dark:hover:bg-gray-800
+                         opacity-0 group-hover:opacity-100 transition-all"
+              aria-label="เมนู"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
 
-          {menuOpen && (
-            <div className="absolute right-0 top-9 z-20 w-40
-                            bg-white dark:bg-gray-800
-                            border border-gray-100 dark:border-gray-700
-                            rounded-xl shadow-xl overflow-hidden
-                            animate-fade-in">
-              <button
-                onClick={() => { setMenuOpen(false); onEdit(); }}
-                className="flex items-center gap-2.5 w-full px-4 py-2.5 text-sm
-                           text-gray-700 dark:text-gray-300
-                           hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-              >
-                <Pencil className="w-3.5 h-3.5 text-gray-400" />
-                แก้ไข
-              </button>
-              <div className="h-px bg-gray-100 dark:bg-gray-700 mx-2" />
-              <button
-                onClick={() => { setMenuOpen(false); onDelete(); }}
-                className="flex items-center gap-2.5 w-full px-4 py-2.5 text-sm
-                           text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                ลบ
-              </button>
-            </div>
-          )}
-        </div>
+            {menuOpen && (
+              <div className="absolute right-0 top-9 z-20 w-40
+                              bg-white dark:bg-gray-800
+                              border border-gray-100 dark:border-gray-700
+                              rounded-xl shadow-xl overflow-hidden
+                              animate-fade-in">
+                <button
+                  onClick={() => { setMenuOpen(false); onEdit(); }}
+                  className="flex items-center gap-2.5 w-full px-4 py-2.5 text-sm
+                             text-gray-700 dark:text-gray-300
+                             hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <Pencil className="w-3.5 h-3.5 text-gray-400" />
+                  แก้ไข
+                </button>
+                <div className="h-px bg-gray-100 dark:bg-gray-700 mx-2" />
+                <button
+                  onClick={() => { setMenuOpen(false); onDelete(); }}
+                  className="flex items-center gap-2.5 w-full px-4 py-2.5 text-sm
+                             text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  ลบ
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Progress */}
@@ -139,28 +143,30 @@ export function BudgetCard({
       </div>
 
       {/* Edit / Delete quick-action bar (visible on hover) */}
-      <div className="flex gap-2 mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          onClick={onEdit}
-          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium
-                     text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400
-                     hover:bg-primary-50 dark:hover:bg-primary-900/20
-                     rounded-lg border border-gray-200 dark:border-gray-700
-                     transition-colors"
-        >
-          <Pencil className="w-3 h-3" /> แก้ไข
-        </button>
-        <button
-          onClick={onDelete}
-          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium
-                     text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400
-                     hover:bg-red-50 dark:hover:bg-red-900/20
-                     rounded-lg border border-gray-200 dark:border-gray-700
-                     transition-colors"
-        >
-          <Trash2 className="w-3 h-3" /> ลบ
-        </button>
-      </div>
+      {!readOnly && (
+        <div className="flex gap-2 mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={onEdit}
+            className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium
+                       text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400
+                       hover:bg-primary-50 dark:hover:bg-primary-900/20
+                       rounded-lg border border-gray-200 dark:border-gray-700
+                       transition-colors"
+          >
+            <Pencil className="w-3 h-3" /> แก้ไข
+          </button>
+          <button
+            onClick={onDelete}
+            className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium
+                       text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400
+                       hover:bg-red-50 dark:hover:bg-red-900/20
+                       rounded-lg border border-gray-200 dark:border-gray-700
+                       transition-colors"
+          >
+            <Trash2 className="w-3 h-3" /> ลบ
+          </button>
+        </div>
+      )}
     </div>
   );
 }

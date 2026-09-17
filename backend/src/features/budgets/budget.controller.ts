@@ -2,13 +2,17 @@ import { Request, Response, NextFunction } from 'express';
 import { BudgetService } from './budget.service';
 import { AuthenticatedRequest } from '../../types';
 import { sendSuccess, sendCreated } from '../../utils/response';
+import { getBangkokYearMonth } from '../../utils/period';
 
 const service = new BudgetService();
 
 export async function getAll(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const budgets = await service.getAll((req as AuthenticatedRequest).user.id);
-    sendSuccess(res, { budgets });
+    const current = getBangkokYearMonth();
+    const year = req.query.year ? parseInt(req.query.year as string) : current.year;
+    const month = req.query.month ? parseInt(req.query.month as string) : current.month;
+    const { budgets, period } = await service.getForPeriod((req as AuthenticatedRequest).user.id, year, month);
+    sendSuccess(res, { budgets, period });
   } catch (err) {
     next(err);
   }

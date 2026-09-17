@@ -2,12 +2,16 @@ import { Request, Response, NextFunction } from 'express';
 import { DashboardService } from './dashboard.service';
 import { AuthenticatedRequest } from '../../types';
 import { sendSuccess } from '../../utils/response';
+import { getBangkokYearMonth } from '../../utils/period';
 
 const service = new DashboardService();
 
 export async function getSummary(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const data = await service.getSummary((req as AuthenticatedRequest).user.id);
+    const current = getBangkokYearMonth();
+    const year = req.query.year ? parseInt(req.query.year as string) : current.year;
+    const month = req.query.month ? parseInt(req.query.month as string) : current.month;
+    const data = await service.getSummaryForPeriod((req as AuthenticatedRequest).user.id, year, month);
     sendSuccess(res, data);
   } catch (err) {
     next(err);

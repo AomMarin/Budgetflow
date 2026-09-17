@@ -1,22 +1,27 @@
 import { useState } from 'react';
-import { Plus, Wallet, PiggyBank } from 'lucide-react';
+import { Plus, Wallet, PiggyBank, AlertTriangle } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { useBudgets } from '@/hooks/useBudgets';
+import { useBudgetsForPeriod } from '@/hooks/useBudgets';
 import { Budget, Account } from '@/types';
 import { api } from '@/services/api';
-import { formatCurrency } from '@/utils/format';
+import { formatCurrency, MONTH_NAMES } from '@/utils/format';
 import { calculateAllocationTotals } from '@/utils/allocation';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { CardSkeleton } from '@/components/ui/Skeleton';
+import { MonthSwitcher } from '@/components/ui/MonthSwitcher';
 import { BudgetForm } from './BudgetForm';
 import { DeleteBudgetModal } from './DeleteBudgetModal';
 import { AllocateIncomeModal } from './AllocateIncomeModal';
 import { BudgetCard } from './BudgetCard';
 
 export function BudgetsPage() {
-  const { data: budgets = [], isLoading } = useBudgets();
+  const now = new Date();
+  const [period, setPeriod] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
+  const { data, isLoading } = useBudgetsForPeriod(period.year, period.month);
+  const budgets = data?.budgets ?? [];
+  const isPastMonth = data ? !data.period.isCurrent : false;
   const { data: accounts = [] } = useQuery<Account[]>({
     queryKey: ['accounts'],
     queryFn: async () => (await api.get('/accounts')).data.data.accounts,
@@ -40,21 +45,52 @@ export function BudgetsPage() {
     <div className="space-y-6 animate-fade-in">
 
       {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          {budgets.length} bucket{budgets.length !== 1 ? 's' : ''}
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">
+            {budgets.length} bucket{budgets.length !== 1 ? 's' : ''}
+          </p>
+          <MonthSwitcher
+            year={period.year}
+            month={period.month}
+            hasPrevious={data?.period.hasPrevious ?? false}
+            hasNext={isPastMonth}
+            onChange={(year, month) => setPeriod({ year, month })}
+          />
+        </div>
         <div className="flex gap-2 shrink-0">
-          <Button variant="secondary" onClick={() => setAllocateOpen(true)}>
+          <Button
+            variant="secondary"
+            onClick={() => setAllocateOpen(true)}
+            disabled={isPastMonth}
+            title={isPastMonth ? 'แก้ไขได้เฉพาะเดือนปัจจุบันเท่านั้น' : undefined}
+          >
             <span className="hidden sm:inline">จัดสรรรายได้</span>
             <span className="sm:hidden">รับเงิน</span>
           </Button>
-          <Button icon={<Plus className="w-4 h-4" />} onClick={() => setCreateOpen(true)}>
+          <Button
+            icon={<Plus className="w-4 h-4" />}
+            onClick={() => setCreateOpen(true)}
+            disabled={isPastMonth}
+            title={isPastMonth ? 'แก้ไขได้เฉพาะเดือนปัจจุบันเท่านั้น' : undefined}
+          >
             <span className="hidden sm:inline">เพิ่ม Budget</span>
             <span className="sm:hidden">เพิ่ม</span>
           </Button>
         </div>
       </div>
+
+      {/* Read-only past-month banner — always visible (not hover-only), since
+          hover doesn't work on mobile. This is the primary signal; the button
+          `title` tooltips above are a desktop-only bonus, not a substitute. */}
+      {isPastMonth && (
+        <div className="card p-4 border-l-4 border-amber-400 bg-amber-50 dark:bg-amber-900/10 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            กำลังดูข้อมูลย้อนหลังเดือน {MONTH_NAMES[period.month - 1]} {period.year} — แก้ไขได้เฉพาะเดือนปัจจุบันเท่านั้น
+          </p>
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -111,8 +147,8 @@ export function BudgetsPage() {
           <EmptyState
             icon={<Wallet className="w-full h-full" />}
             title="ยังไม่มี Budget"
-            description="สร้าง Budget Bucket แรกเพื่อเริ่มจัดสรรรายได้ของคุณ"
-            action={{ label: 'สร้าง Budget', onClick: () => setCreateOpen(true) }}
+            description={isPastMonth ? 'ไม่มีข้อมูล Budget ในเดือนนี้' : 'สร้าง Budget Bucket แรกเพื่อเริ่มจัดสรรรายได้ของคุณ'}
+            action={isPastMonth ? undefined : { label: 'สร้าง Budget', onClick: () => setCreateOpen(true) }}
           />
         </div>
       ) : (
@@ -123,24 +159,27 @@ export function BudgetsPage() {
               budget={budget}
               onEdit={() => setEditBudget(budget)}
               onDelete={() => setDeleteBudget(budget)}
+              readOnly={isPastMonth}
             />
           ))}
 
           {/* Quick-add card */}
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="card p-5 border-dashed border-2 border-gray-200 dark:border-gray-700
-                       flex flex-col items-center justify-center gap-2 min-h-[180px]
-                       text-gray-400 dark:text-gray-600 hover:border-primary-400 hover:text-primary-500
-                       dark:hover:border-primary-600 dark:hover:text-primary-400
-                       transition-all duration-200 group"
-          >
-            <div className="w-10 h-10 rounded-xl border-2 border-current flex items-center justify-center
-                            group-hover:scale-110 transition-transform">
-              <Plus className="w-5 h-5" />
-            </div>
-            <span className="text-sm font-medium">เพิ่ม Budget ใหม่</span>
-          </button>
+          {!isPastMonth && (
+            <button
+              onClick={() => setCreateOpen(true)}
+              className="card p-5 border-dashed border-2 border-gray-200 dark:border-gray-700
+                         flex flex-col items-center justify-center gap-2 min-h-[180px]
+                         text-gray-400 dark:text-gray-600 hover:border-primary-400 hover:text-primary-500
+                         dark:hover:border-primary-600 dark:hover:text-primary-400
+                         transition-all duration-200 group"
+            >
+              <div className="w-10 h-10 rounded-xl border-2 border-current flex items-center justify-center
+                              group-hover:scale-110 transition-transform">
+                <Plus className="w-5 h-5" />
+              </div>
+              <span className="text-sm font-medium">เพิ่ม Budget ใหม่</span>
+            </button>
+          )}
         </div>
       )}
 
