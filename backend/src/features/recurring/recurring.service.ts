@@ -1,6 +1,7 @@
 import { prisma } from '../../config/database';
 import { RecurringRepository } from './recurring.repository';
 import { CreateRecurringDto, UpdateRecurringDto } from './recurring.dto';
+import { mirrorSessionAmount } from '../../utils/budget-session';
 
 export class RecurringService {
   constructor(private readonly repo = new RecurringRepository()) {}
@@ -94,6 +95,7 @@ export class RecurringService {
               where: { id: recurring.budgetId },
               data: { spentAmount: { increment: Number(recurring.amount) } },
             });
+            await mirrorSessionAmount(tx, recurring.budgetId, { spentAmount: Number(recurring.amount) });
           }
         }
 

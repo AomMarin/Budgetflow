@@ -93,6 +93,10 @@ router.post('/reset-data', async (req: Request, res: Response, next: NextFunctio
         where: { userId },
         data: { allocatedAmount: 0, spentAmount: 0 },
       }),
+      prisma.budgetSession.updateMany({
+        where: { userId, status: 'OPEN' },
+        data: { allocatedAmount: 0, spentAmount: 0 },
+      }),
       // Mark recurring as run today so they don't re-fire immediately after reset
       prisma.recurringTransaction.updateMany({
         where: { userId },

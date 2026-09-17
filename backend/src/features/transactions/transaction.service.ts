@@ -7,6 +7,7 @@ import { buildPaginationMeta } from '../../utils/response';
 import { getBangkokYearMonth, isBeforeYearMonth } from '../../utils/period';
 import { assertBudgetsPeriodOpen, closedPeriodError } from '../../utils/period-guard';
 import { withRetry } from '../../utils/db-retry';
+import { mirrorSessionAmount } from '../../utils/budget-session';
 
 type BudgetLockRow = { id: string; name: string; allocatedAmount: string; spentAmount: string };
 type Split = { budgetId: string; amount: number };
@@ -183,6 +184,7 @@ export class TransactionService {
         if (splits.length > 0) {
           for (const s of splits) {
             await tx.budget.update({ where: { id: s.budgetId }, data: { spentAmount: { increment: s.amount } } });
+            await mirrorSessionAmount(tx, s.budgetId, { spentAmount: s.amount });
           }
           await tx.transactionSplit.createMany({
             data: splits.map((s) => ({ transactionId: created.id, budgetId: s.budgetId, amount: s.amount })),
@@ -192,6 +194,7 @@ export class TransactionService {
             where: { id: dto.budgetId },
             data: { spentAmount: { increment: dto.amount } },
           });
+          await mirrorSessionAmount(tx, dto.budgetId, { spentAmount: dto.amount });
         }
 
         if (splits.length > 0) {
@@ -291,12 +294,14 @@ export class TransactionService {
               where: { id: s.budgetId },
               data: { spentAmount: { decrement: Number(s.amount) } },
             });
+            await mirrorSessionAmount(tx, s.budgetId, { spentAmount: -Number(s.amount) });
           }
         } else if (existing.budgetId) {
           await tx.budget.update({
             where: { id: existing.budgetId },
             data: { spentAmount: { decrement: Number(existing.amount) } },
           });
+          await mirrorSessionAmount(tx, existing.budgetId, { spentAmount: -Number(existing.amount) });
         }
       }
       await tx.transactionSplit.deleteMany({ where: { transactionId: id } });
@@ -315,6 +320,7 @@ export class TransactionService {
         if (newSplits.length > 0) {
           for (const s of newSplits) {
             await tx.budget.update({ where: { id: s.budgetId }, data: { spentAmount: { increment: s.amount } } });
+            await mirrorSessionAmount(tx, s.budgetId, { spentAmount: s.amount });
           }
           await tx.transactionSplit.createMany({
             data: newSplits.map((s) => ({ transactionId: id, budgetId: s.budgetId, amount: s.amount })),
@@ -324,6 +330,7 @@ export class TransactionService {
             where: { id: newBudgetId },
             data: { spentAmount: { increment: newAmount } },
           });
+          await mirrorSessionAmount(tx, newBudgetId, { spentAmount: newAmount });
         }
       }
 
@@ -417,6 +424,7 @@ export class TransactionService {
               where: { id: dto.budgetId },
               data: { spentAmount: { increment: dto.amount } },
             });
+            await mirrorSessionAmount(tx, dto.budgetId, { spentAmount: dto.amount });
           }
         }
       }
@@ -464,12 +472,14 @@ export class TransactionService {
               where: { id: s.budgetId },
               data: { spentAmount: { decrement: Number(s.amount) } },
             });
+            await mirrorSessionAmount(tx, s.budgetId, { spentAmount: -Number(s.amount) });
           }
         } else if (existing.budgetId) {
           await tx.budget.update({
             where: { id: existing.budgetId },
             data: { spentAmount: { decrement: Number(existing.amount) } },
           });
+          await mirrorSessionAmount(tx, existing.budgetId, { spentAmount: -Number(existing.amount) });
         }
       }
 

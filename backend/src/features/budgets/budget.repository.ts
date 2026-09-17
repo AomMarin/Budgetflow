@@ -18,9 +18,24 @@ export class BudgetRepository {
 
   async create(userId: string, data: CreateBudgetDto, db: Db = prisma): Promise<Budget> {
     const count = await db.budget.count({ where: { userId } });
-    return db.budget.create({
+    const budget = await db.budget.create({
       data: { ...data, userId, sortOrder: count },
     });
+    // A new budget has no prior session to mirror into — create its first
+    // one here, atomically alongside the Budget row (same db/tx param).
+    await db.budgetSession.create({
+      data: {
+        budgetId: budget.id,
+        userId,
+        periodYear: budget.periodYear,
+        periodMonth: budget.periodMonth,
+        allocatedAmount: budget.allocatedAmount,
+        spentAmount: budget.spentAmount,
+        rolloverPolicy: budget.rolloverPolicy,
+        status: 'OPEN',
+      },
+    });
+    return budget;
   }
 
   async update(id: string, userId: string, data: UpdateBudgetDto, db: Db = prisma): Promise<Budget> {

@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { TransactionService } from '../transaction.service';
 import { BudgetService } from '../../budgets/budget.service';
 import { prisma } from '../../../config/database';
-import { createTestUser, cleanupTestUser, TestUserContext } from '../../../test/helpers';
+import { createTestUser, cleanupTestUser, assertSessionMirror, TestUserContext } from '../../../test/helpers';
 
 describe('TransactionService — borrow-from-budget (TransactionSplit)', () => {
   let ctx: TestUserContext;
@@ -86,6 +86,7 @@ describe('TransactionService — borrow-from-budget (TransactionSplit)', () => {
     expect(Number(foodAfter.allocatedAmount)).toBe(6000); // untouched
     expect(Number(emergencyAfter.spentAmount)).toBe(1000);
     expect(Number(emergencyAfter.allocatedAmount)).toBe(1000); // untouched
+    await assertSessionMirror(ctx.userId);
 
     const account = await prisma.account.findUniqueOrThrow({ where: { id: ctx.accountId } });
     expect(Number(account.balance)).toBe(10000 - 2000 - 5000);
@@ -204,6 +205,7 @@ describe('TransactionService — borrow-from-budget (TransactionSplit)', () => {
     expect(Number(account.balance)).toBe(10000);
     const splits = await prisma.transactionSplit.findMany({ where: { transactionId: created.id } });
     expect(splits).toHaveLength(0); // cascade-deleted
+    await assertSessionMirror(ctx.userId);
   });
 
   it('editing a borrow transaction to fit its own budget again reverses both splits and drops them', async () => {
@@ -327,5 +329,6 @@ describe('TransactionService — borrow-from-budget (TransactionSplit)', () => {
     // actually has covered (allocatedAmount is never touched by borrow).
     expect(Number(aAfter.allocatedAmount)).toBe(100);
     expect(Number(bAfter.allocatedAmount)).toBe(100);
+    await assertSessionMirror(ctx.userId);
   });
 });

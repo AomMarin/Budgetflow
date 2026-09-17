@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { TransactionService } from '../transaction.service';
 import { BudgetService } from '../../budgets/budget.service';
 import { prisma } from '../../../config/database';
-import { createTestUser, cleanupTestUser, TestUserContext } from '../../../test/helpers';
+import { createTestUser, cleanupTestUser, assertSessionMirror, TestUserContext } from '../../../test/helpers';
 
 describe('TransactionService — EXPENSE side-effects', () => {
   let ctx: TestUserContext;
@@ -38,6 +38,7 @@ describe('TransactionService — EXPENSE side-effects', () => {
     const budget = await prisma.budget.findUniqueOrThrow({ where: { id: food.id } });
     expect(Number(account.balance)).toBe(800);
     expect(Number(budget.spentAmount)).toBe(200);
+    await assertSessionMirror(ctx.userId);
   });
 
   it('blocks an EXPENSE that exceeds the budget remaining', async () => {
@@ -63,6 +64,7 @@ describe('TransactionService — EXPENSE side-effects', () => {
     const budget = await prisma.budget.findUniqueOrThrow({ where: { id: food.id } });
     expect(Number(account.balance)).toBe(1000);
     expect(Number(budget.spentAmount)).toBe(0);
+    await assertSessionMirror(ctx.userId);
   });
 
   it('editing a transaction reverses the original effect before applying the new one', async () => {
@@ -98,6 +100,7 @@ describe('TransactionService — EXPENSE side-effects', () => {
     expect(Number(foodAfter.spentAmount)).toBe(0); // fully reversed
     expect(Number(transportAfter.spentAmount)).toBe(250); // new effect applied
     expect(Number(account.balance)).toBe(750); // 1000 - 250
+    await assertSessionMirror(ctx.userId);
   });
 
   it('deleting a transaction fully reverses its effect', async () => {
@@ -123,5 +126,6 @@ describe('TransactionService — EXPENSE side-effects', () => {
     const budget = await prisma.budget.findUniqueOrThrow({ where: { id: food.id } });
     expect(Number(account.balance)).toBe(1000);
     expect(Number(budget.spentAmount)).toBe(0);
+    await assertSessionMirror(ctx.userId);
   });
 });

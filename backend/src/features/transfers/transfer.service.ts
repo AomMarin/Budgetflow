@@ -1,6 +1,8 @@
 import { prisma } from '../../config/database';
 import { buildPaginationMeta } from '../../utils/response';
 import { withRetry } from '../../utils/db-retry';
+import { mirrorSessionAmount } from '../../utils/budget-session';
+import { BudgetService } from '../budgets/budget.service';
 
 export interface CreateTransferDto {
   fromBudgetId: string;
@@ -10,6 +12,8 @@ export interface CreateTransferDto {
 }
 
 export class TransferService {
+  constructor(private readonly budgetService = new BudgetService()) {}
+
   // No closed-period guard here, unlike transaction.service.ts / pool.service.ts
   // reverseContribution(). Both conditions that make the guard necessary are
   // absent for transfers: (1) CreateTransferDto has no `date` — a transfer
@@ -23,6 +27,14 @@ export class TransferService {
     if (dto.fromBudgetId === dto.toBudgetId) {
       throw Object.assign(new Error('Cannot transfer to the same budget'), { status: 400 });
     }
+
+    // Ensure both budget rows reflect the current period before the locked
+    // read below — a transfer has no `date` and always acts at "now", but
+    // without this the row could still be sitting at a stale, not-yet-closed
+    // past period (lazy-close hasn't run since e.g. getAll()/getSummary()
+    // was last called), silently landing this transfer in the wrong month
+    // once that period eventually closes.
+    await this.budgetService.closeAndAdvancePeriodsForUser(userId);
 
     return withRetry(() => prisma.$transaction(async (tx) => {
       // Row-locked read: prevents two concurrent transfers from the same
@@ -63,12 +75,14 @@ export class TransferService {
         where: { id: dto.fromBudgetId },
         data: { allocatedAmount: { decrement: dto.amount } },
       });
+      await mirrorSessionAmount(tx, dto.fromBudgetId, { allocatedAmount: -dto.amount });
 
       // Credit to destination (increase allocated)
       await tx.budget.update({
         where: { id: dto.toBudgetId },
         data: { allocatedAmount: { increment: dto.amount } },
       });
+      await mirrorSessionAmount(tx, dto.toBudgetId, { allocatedAmount: dto.amount });
 
       return transfer;
     }), 'transfer.create');

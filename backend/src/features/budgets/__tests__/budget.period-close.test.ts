@@ -3,7 +3,13 @@ import { RolloverPolicy } from '@prisma/client';
 import { BudgetService } from '../budget.service';
 import { TransactionService } from '../../transactions/transaction.service';
 import { prisma } from '../../../config/database';
-import { createTestUser, cleanupTestUser, assertZeroBasedInvariant, TestUserContext } from '../../../test/helpers';
+import {
+  createTestUser,
+  cleanupTestUser,
+  assertZeroBasedInvariant,
+  assertSessionMirror,
+  TestUserContext,
+} from '../../../test/helpers';
 import { getBangkokYearMonth } from '../../../utils/period';
 
 // Mid-day UTC so the Bangkok (UTC+7) calendar date never crosses a day
@@ -49,6 +55,7 @@ describe('BudgetService.closeAndAdvancePeriodsForUser', () => {
     expect(history.rolloverPolicy).toBe(RolloverPolicy.SWEEP);
 
     await assertZeroBasedInvariant(ctx.userId);
+    await assertSessionMirror(ctx.userId);
   });
 
   it('ROLLOVER carries max(allocated - spent, 0) forward, leaving remaining unchanged', async () => {
@@ -62,6 +69,7 @@ describe('BudgetService.closeAndAdvancePeriodsForUser', () => {
     expect(Number(after.spentAmount)).toBe(0);
 
     await assertZeroBasedInvariant(ctx.userId);
+    await assertSessionMirror(ctx.userId);
   });
 
   it('ROLLOVER clamps to 0 for legacy data where spent already exceeded allocated', async () => {
@@ -75,6 +83,7 @@ describe('BudgetService.closeAndAdvancePeriodsForUser', () => {
     expect(Number(after.spentAmount)).toBe(0);
 
     await assertZeroBasedInvariant(ctx.userId);
+    await assertSessionMirror(ctx.userId);
   });
 
   it('RESET tops up to monthlyTarget when the pool has enough room (fully-funded)', async () => {
@@ -93,6 +102,7 @@ describe('BudgetService.closeAndAdvancePeriodsForUser', () => {
     expect(Number(after.spentAmount)).toBe(0);
 
     await assertZeroBasedInvariant(ctx.userId);
+    await assertSessionMirror(ctx.userId);
   });
 
   it('RESET caps the top-up at whatever pool is actually available (partial-fill)', async () => {
@@ -109,6 +119,7 @@ describe('BudgetService.closeAndAdvancePeriodsForUser', () => {
     const after = await prisma.budget.findUniqueOrThrow({ where: { id: b.id } });
     expect(Number(after.allocatedAmount)).toBe(300); // capped by pool, not the 800 target
     await assertZeroBasedInvariant(ctx.userId);
+    await assertSessionMirror(ctx.userId);
   });
 
   it('RESET gives zero top-up when the pool is fully consumed by existing remaining', async () => {
@@ -124,6 +135,7 @@ describe('BudgetService.closeAndAdvancePeriodsForUser', () => {
     const after = await prisma.budget.findUniqueOrThrow({ where: { id: b.id } });
     expect(Number(after.allocatedAmount)).toBe(1000); // unchanged, no room to top up
     await assertZeroBasedInvariant(ctx.userId);
+    await assertSessionMirror(ctx.userId);
   });
 
   it('RESET: two budgets competing for the same pool are settled first-come-first-served by sortOrder', async () => {
@@ -142,6 +154,7 @@ describe('BudgetService.closeAndAdvancePeriodsForUser', () => {
     expect(Number(afterA.allocatedAmount)).toBe(600); // fully funded first
     expect(Number(afterB.allocatedAmount)).toBe(400); // only 1000-600=400 left in the pool
     await assertZeroBasedInvariant(ctx.userId);
+    await assertSessionMirror(ctx.userId);
   });
 
   it('is idempotent: calling again with the same "now" does not change anything or duplicate history', async () => {
@@ -201,6 +214,7 @@ describe('BudgetService.closeAndAdvancePeriodsForUser', () => {
     const splitsAfter = await prisma.transactionSplit.findMany({ where: { budgetId: food.id } });
     expect(splitsAfter).toHaveLength(1);
     await assertZeroBasedInvariant(ctx.userId);
+    await assertSessionMirror(ctx.userId);
   });
 
   it('concurrent calls (cron vs. a lazy hook) racing for the same pool never double-spend it', async () => {
@@ -221,6 +235,7 @@ describe('BudgetService.closeAndAdvancePeriodsForUser', () => {
     expect(Number(afterA.allocatedAmount)).toBe(600);
     expect(Number(afterB.allocatedAmount)).toBe(400);
     await assertZeroBasedInvariant(ctx.userId);
+    await assertSessionMirror(ctx.userId);
 
     const historyCountA = await prisma.budgetMonthlyHistory.count({ where: { budgetId: a.id } });
     const historyCountB = await prisma.budgetMonthlyHistory.count({ where: { budgetId: b.id } });

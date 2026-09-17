@@ -3,7 +3,7 @@ import { HouseholdService } from '../../household.service';
 import { PoolService } from '../pool.service';
 import { BudgetService } from '../../../budgets/budget.service';
 import { prisma } from '../../../../config/database';
-import { createTestUser, cleanupTestUser, TestUserContext } from '../../../../test/helpers';
+import { createTestUser, cleanupTestUser, assertSessionMirror, TestUserContext } from '../../../../test/helpers';
 
 // Same fix as transaction.expense-budget-required.test.ts, applied to the
 // household pool's separate write path: PoolService.contribute() used to
@@ -53,5 +53,6 @@ describe('PoolService.contribute() requires a fromBudgetId', () => {
     const budget = await prisma.budget.findUniqueOrThrow({ where: { id: food.id } });
     expect(Number(account.balance)).toBe(900);
     expect(Number(budget.spentAmount)).toBe(100);
+    await assertSessionMirror(ctx.userId);
   });
 });

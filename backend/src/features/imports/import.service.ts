@@ -4,6 +4,7 @@ import { prisma } from '../../config/database';
 import { parseCsvFile, applyCategorizationRules } from '../../utils/csv-parser';
 import { buildPaginationMeta } from '../../utils/response';
 import { notifyBudgetAlerts } from '../../utils/budget-alerts';
+import { mirrorSessionAmount } from '../../utils/budget-session';
 
 export class ImportService {
   async upload(userId: string, file: Express.Multer.File, accountId: string) {
@@ -86,6 +87,7 @@ export class ImportService {
               where: { id: row.budgetId },
               data: { spentAmount: { increment: row.amount } },
             });
+            await mirrorSessionAmount(tx, row.budgetId, { spentAmount: row.amount });
           }
         }
       }

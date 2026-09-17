@@ -52,3 +52,29 @@ export async function assertZeroBasedInvariant(userId: string): Promise<void> {
   // Tiny epsilon for Decimal->Number float round-trip, not a real allowance.
   expect(totalRemaining).toBeLessThanOrEqual(totalBalance + 0.001);
 }
+
+// Phase A of the session-based budget model (see
+// C:\Users\ammar\.claude\plans\kind-dancing-sparrow.md): BudgetSession is a
+// live mirror of Budget's own allocatedAmount/spentAmount/periodYear/
+// periodMonth, kept in sync by mirrorSessionAmount() at every write site.
+// Nothing reads BudgetSession yet, so this is the only thing that would
+// catch a missed mirror call — every test exercising a write path covered by
+// that migration should call this alongside assertZeroBasedInvariant.
+export async function assertSessionMirror(userId: string): Promise<void> {
+  const budgets = await prisma.budget.findMany({ where: { userId, isArchived: false } });
+  for (const budget of budgets) {
+    const openSessions = await prisma.budgetSession.findMany({
+      where: { budgetId: budget.id, status: 'OPEN' },
+    });
+    expect(openSessions, `budget ${budget.id} ("${budget.name}") has no OPEN session`).toHaveLength(1);
+    const session = openSessions[0];
+    expect(Number(session.allocatedAmount), `budget ${budget.id} allocatedAmount mirror mismatch`).toBe(
+      Number(budget.allocatedAmount),
+    );
+    expect(Number(session.spentAmount), `budget ${budget.id} spentAmount mirror mismatch`).toBe(
+      Number(budget.spentAmount),
+    );
+    expect(session.periodYear, `budget ${budget.id} periodYear mirror mismatch`).toBe(budget.periodYear);
+    expect(session.periodMonth, `budget ${budget.id} periodMonth mirror mismatch`).toBe(budget.periodMonth);
+  }
+}

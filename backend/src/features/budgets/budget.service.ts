@@ -5,6 +5,8 @@ import { prisma } from '../../config/database';
 import { getBangkokYearMonth, nextYearMonth, isBeforeYearMonth, YearMonth } from '../../utils/period';
 import { logger } from '../../utils/logger';
 import { withRetry } from '../../utils/db-retry';
+import { mirrorSessionAmount, mirrorSessionRolloverPolicy } from '../../utils/budget-session';
+import { computeBudgetStats } from '../../utils/budget-stats';
 
 function periodOf(budget: Budget): YearMonth {
   return { year: budget.periodYear, month: budget.periodMonth };
@@ -148,7 +150,16 @@ export class BudgetService {
         }
       }
 
-      return this.repo.update(id, userId, dto, tx);
+      const updated = await this.repo.update(id, userId, dto, tx);
+      if (dto.allocatedAmount !== undefined) {
+        await mirrorSessionAmount(tx, id, {
+          allocatedAmount: dto.allocatedAmount - Number(existing.allocatedAmount),
+        });
+      }
+      if (dto.rolloverPolicy !== undefined) {
+        await mirrorSessionRolloverPolicy(tx, id, dto.rolloverPolicy);
+      }
+      return updated;
     }), 'budget.update');
     return this.addStats(budget);
   }
@@ -206,6 +217,7 @@ export class BudgetService {
           where: { id: alloc.budgetId },
           data: { allocatedAmount: { increment: alloc.amount } },
         });
+        await mirrorSessionAmount(tx, alloc.budgetId, { allocatedAmount: alloc.amount });
 
         await tx.allocation.create({
           data: {
@@ -427,6 +439,53 @@ export class BudgetService {
       update: {},
     });
 
+    // Close the current OPEN session, stamping the final oldAllocated/oldSpent
+    // AND closedPeriod explicitly rather than trusting mirror/period accuracy
+    // up to this point — makes month-close self-correcting if any earlier
+    // mirror write was ever missed, and (the periodYear/periodMonth/
+    // rolloverPolicy fields specifically) keeps a period-aware historical
+    // read correct even if something upstream ever moved Budget's own period
+    // or policy without the session mirror keeping up — organically this
+    // never happens for periodYear/periodMonth (create()/commitMonthClose()
+    // are the only writers, always in lockstep by construction), but
+    // rolloverPolicy CAN legitimately change mid-period via
+    // BudgetService.update() — this stamp is what makes the closed session's
+    // "policy that was in effect during this period" snapshot correct
+    // regardless of whether update()'s own mirror (mirrorSessionRolloverPolicy)
+    // ran for every change; that mirror keeps the *live* OPEN session
+    // accurate in real time, this stamp is the belt-and-suspenders backstop
+    // at the moment of closing.
+    await tx.budgetSession.updateMany({
+      where: { budgetId: budget.id, status: 'OPEN' },
+      data: {
+        status: 'CLOSED',
+        closedAt: new Date(),
+        allocatedAmount: oldAllocated,
+        spentAmount: oldSpent,
+        periodYear: closedPeriod.year,
+        periodMonth: closedPeriod.month,
+        rolloverPolicy: budget.rolloverPolicy,
+      },
+    });
+    // Open the new period's session (idempotent — re-running a close for an
+    // already-advanced budget is a no-op via the unique constraint).
+    await tx.budgetSession.upsert({
+      where: {
+        budgetId_periodYear_periodMonth: { budgetId: budget.id, periodYear: next.year, periodMonth: next.month },
+      },
+      create: {
+        budgetId: budget.id,
+        userId: budget.userId,
+        periodYear: next.year,
+        periodMonth: next.month,
+        allocatedAmount: newAllocated,
+        spentAmount: 0,
+        rolloverPolicy: budget.rolloverPolicy,
+        status: 'OPEN',
+      },
+      update: {},
+    });
+
     return {
       userId: budget.userId,
       budgetId: budget.id,
@@ -440,17 +499,7 @@ export class BudgetService {
     };
   }
 
-  private addStats(budget: Budget): BudgetWithStats {
-    const allocated = Number(budget.allocatedAmount);
-    const spent = Number(budget.spentAmount);
-    const remaining = allocated - spent;
-    const usagePercent = allocated > 0 ? Math.round((spent / allocated) * 100) : 0;
-
-    let alertLevel: BudgetWithStats['alertLevel'] = null;
-    if (usagePercent >= 100) alertLevel = '100';
-    else if (usagePercent >= 90) alertLevel = '90';
-    else if (usagePercent >= 80) alertLevel = '80';
-
-    return { ...budget, remainingAmount: remaining, usagePercent, alertLevel };
-  }
+  private addStats = (budget: Budget): BudgetWithStats => {
+    return { ...budget, ...computeBudgetStats(Number(budget.allocatedAmount), Number(budget.spentAmount)) };
+  };
 }

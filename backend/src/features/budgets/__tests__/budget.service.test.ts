@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { RolloverPolicy } from '@prisma/client';
 import { BudgetService } from '../budget.service';
 import { prisma } from '../../../config/database';
-import { createTestUser, cleanupTestUser, TestUserContext } from '../../../test/helpers';
+import { createTestUser, cleanupTestUser, assertSessionMirror, TestUserContext } from '../../../test/helpers';
 
 describe('BudgetService — zero-based invariant', () => {
   let ctx: TestUserContext;
@@ -204,5 +204,39 @@ describe('BudgetService.update — new guards', () => {
       allocatedAmount: 600,
     });
     expect(Number(transport.allocatedAmount)).toBe(600);
+  });
+});
+
+describe('BudgetService — BudgetSession mirror (Phase A)', () => {
+  let ctx: TestUserContext;
+  const service = new BudgetService();
+
+  beforeEach(async () => {
+    ctx = await createTestUser(1000);
+  });
+
+  afterEach(async () => {
+    await cleanupTestUser(ctx.userId);
+  });
+
+  it('create() opens a matching BudgetSession alongside the Budget row', async () => {
+    await service.create(ctx.userId, { name: 'Food', icon: '🍔', color: '#3B82F6', allocatedAmount: 400 });
+    await assertSessionMirror(ctx.userId);
+  });
+
+  it('allocateIncome() mirrors the allocatedAmount increment', async () => {
+    const budget = await service.create(ctx.userId, { name: 'Food', icon: '🍔', color: '#3B82F6', allocatedAmount: 0 });
+    await service.allocateIncome(ctx.userId, {
+      accountId: ctx.accountId,
+      totalAmount: 200,
+      allocations: [{ budgetId: budget.id, amount: 150 }],
+    });
+    await assertSessionMirror(ctx.userId);
+  });
+
+  it('update() mirrors an allocatedAmount change', async () => {
+    const budget = await service.create(ctx.userId, { name: 'Food', icon: '🍔', color: '#3B82F6', allocatedAmount: 200 });
+    await service.update(budget.id, ctx.userId, { allocatedAmount: 500 });
+    await assertSessionMirror(ctx.userId);
   });
 });

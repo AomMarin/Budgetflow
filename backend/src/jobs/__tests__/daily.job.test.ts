@@ -3,7 +3,7 @@ import { RolloverPolicy } from '@prisma/client';
 import { runDailyJob } from '../daily.job';
 import { BudgetService } from '../../features/budgets/budget.service';
 import { prisma } from '../../config/database';
-import { createTestUser, cleanupTestUser, TestUserContext } from '../../test/helpers';
+import { createTestUser, cleanupTestUser, assertSessionMirror, TestUserContext } from '../../test/helpers';
 import { getBangkokYearMonth } from '../../utils/period';
 
 // See budget.period-close.test.ts's "lazy period-close hook wiring" describe
@@ -40,5 +40,6 @@ describe('runDailyJob period-close wiring', () => {
     expect(after.periodYear).toBe(year);
     expect(after.periodMonth).toBe(month);
     expect(Number(after.spentAmount)).toBe(0);
+    await assertSessionMirror(ctx.userId);
   });
 });

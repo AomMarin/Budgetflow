@@ -10,6 +10,7 @@ import { CreateBudgetDto, UpdateBudgetDto } from '../../budgets/budget.dto';
 import { PoolRepository } from './pool.repository';
 import { ContributeDto, SpendDto, UpdatePoolTransactionDto } from './pool.dto';
 import { assertBudgetsPeriodOpen } from '../../../utils/period-guard';
+import { mirrorSessionAmount } from '../../../utils/budget-session';
 
 export class PoolService {
   constructor(
@@ -164,6 +165,11 @@ export class PoolService {
     const description = dto.description || `สมทบงบกลาง: ${membership.household.name}`;
     const poolDescription = `เงินสมทบจาก ${actor.name}`;
 
+    // Same reasoning as transfer.service.ts create(): a contribution has no
+    // date and always acts at "now", but without this the budget row could
+    // still be sitting at a stale period nobody has lazily advanced yet.
+    await this.budgetService.closeAndAdvancePeriodsForUser(actorUserId);
+
     return prisma.$transaction(async (tx) => {
       // Row-locked read: prevents two concurrent contributions from the same
       // budget both passing the check against the same stale spentAmount.
@@ -199,6 +205,7 @@ export class PoolService {
         where: { id: dto.fromBudgetId },
         data: { spentAmount: { increment: dto.amount } },
       });
+      await mirrorSessionAmount(tx, dto.fromBudgetId, { spentAmount: dto.amount });
 
       const poolTx = await tx.transaction.create({
         data: {
@@ -267,6 +274,7 @@ export class PoolService {
           where: { id: memberTx.budgetId },
           data: { spentAmount: { decrement: Number(memberTx.amount) } },
         });
+        await mirrorSessionAmount(tx, memberTx.budgetId, { spentAmount: -Number(memberTx.amount) });
       }
 
       await tx.transaction.delete({ where: { id: poolTx.id } });
