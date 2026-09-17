@@ -111,9 +111,15 @@ export class DashboardService {
 
     if (isCurrent) {
       const summary = await this.getSummary(userId);
+      // getSummary()'s own recentTransactions is unbounded ("5 most recent
+      // ever") — kept that way for household.service.ts's family overview,
+      // which calls getSummary() directly and isn't month-switcher-aware.
+      // The switcher itself must be consistently month-scoped in both
+      // branches, so override it here rather than changing getSummary().
+      const recentTransactions = await this.getRecentTransactionsForMonth(userId, year, month);
       const hasPrevious = await this.budgetService.hasPreviousPeriod(userId, year, month);
       const period: PeriodMeta = { year, month, hasPrevious, isCurrent: true };
-      return { ...summary, period };
+      return { ...summary, recentTransactions, period };
     }
 
     const { budgets, period } = await this.budgetService.getForPeriod(userId, year, month);
@@ -126,15 +132,7 @@ export class DashboardService {
         where: { userId, date: { gte: start, lte: end } },
         _sum: { amount: true },
       }),
-      // Bounded to the viewed month, unlike getSummary()'s "5 most recent
-      // ever" — a global "recent" reading makes no sense for a frozen past
-      // month.
-      prisma.transaction.findMany({
-        where: { userId, date: { gte: start, lte: end } },
-        include: { budget: { select: { name: true, icon: true, color: true } } },
-        orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
-        take: 5,
-      }),
+      this.getRecentTransactionsForMonth(userId, year, month),
     ]);
 
     // This app has no historical balance tracking at all — Account.balance
@@ -164,6 +162,20 @@ export class DashboardService {
       alerts: [],
       period,
     };
+  }
+
+  // Shared by both branches of getSummaryForPeriod() so "recent" is always
+  // scoped to the month actually being viewed — a global "5 most recent
+  // ever" reading (getSummary()'s own default) makes no sense once the page
+  // has a month switcher, current period included.
+  private async getRecentTransactionsForMonth(userId: string, year: number, month: number) {
+    const { start, end } = bangkokMonthRangeUtc(year, month);
+    return prisma.transaction.findMany({
+      where: { userId, date: { gte: start, lte: end } },
+      include: { budget: { select: { name: true, icon: true, color: true } } },
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+      take: 5,
+    });
   }
 
   async getSpendingByBudget(userId: string, year: number, month: number) {

@@ -3,7 +3,7 @@ import { RolloverPolicy } from '@prisma/client';
 import { BudgetService } from '../budget.service';
 import { prisma } from '../../../config/database';
 import { createTestUser, cleanupTestUser, TestUserContext } from '../../../test/helpers';
-import { getBangkokYearMonth, nextYearMonth } from '../../../utils/period';
+import { getBangkokYearMonth, nextYearMonth, bangkokMonthRangeUtc } from '../../../utils/period';
 
 async function setPeriod(budgetId: string, year: number, month: number, extra: Record<string, unknown> = {}) {
   return prisma.budget.update({ where: { id: budgetId }, data: { periodYear: year, periodMonth: month, ...extra } });
@@ -62,6 +62,30 @@ describe('BudgetService.getForPeriod', () => {
 
     expect(budgets).toEqual([]);
     expect(period).toMatchObject({ year: 1999, month: 1, hasPrevious: false, isCurrent: false });
+  });
+
+  it('hasPrevious is true from a Transaction alone, even with zero BudgetSession history — an INCOME row (never guarded by assertBudgetsPeriodOpen) or an imported one can predate every budget', async () => {
+    await service.create(ctx.userId, { name: 'Food', icon: '🍔', color: '#3B82F6', allocatedAmount: 400 });
+    const current = getBangkokYearMonth();
+    const past = monthsBefore(current, 2);
+
+    // No setPeriod()/close involved — this budget's only session is the one
+    // OPEN session at `current`. Created directly, matching how INCOME
+    // (never budget-guarded) or a CSV import (guard bypassed entirely) can
+    // record a date this old in real production.
+    await prisma.transaction.create({
+      data: {
+        userId: ctx.userId,
+        accountId: ctx.accountId,
+        type: 'INCOME',
+        amount: 500,
+        description: 'old income, predates any budget/session',
+        date: bangkokMonthRangeUtc(past.year, past.month).start,
+      },
+    });
+
+    const { period } = await service.getForPeriod(ctx.userId, current.year, current.month);
+    expect(period.hasPrevious).toBe(true);
   });
 
   it('a genuinely closed historical month returns the frozen BudgetSession numbers, including an archived budget, and hasPrevious flips correctly at the boundary', async () => {

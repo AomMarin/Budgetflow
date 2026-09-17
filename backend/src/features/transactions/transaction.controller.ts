@@ -2,18 +2,35 @@ import { Request, Response, NextFunction } from 'express';
 import { TransactionService } from './transaction.service';
 import { AuthenticatedRequest } from '../../types';
 import { sendSuccess, sendCreated } from '../../utils/response';
+import { bangkokMonthRangeUtc } from '../../utils/period';
 
 const service = new TransactionService();
 
 export async function getAll(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    // year/month is the month-switcher filter (additive alongside the
+    // generic startDate/endDate, which stay available for any other caller)
+    // — translated to a Bangkok-correct range here, same as
+    // budget.controller.ts/dashboard.controller.ts, so TransactionRepository
+    // never needs to know about "year/month" as a concept.
+    let startDate = req.query.startDate as string | undefined;
+    let endDate = req.query.endDate as string | undefined;
+    if (req.query.year && req.query.month) {
+      const { start, end } = bangkokMonthRangeUtc(
+        parseInt(req.query.year as string),
+        parseInt(req.query.month as string),
+      );
+      startDate = start.toISOString();
+      endDate = end.toISOString();
+    }
+
     const { transactions, meta } = await service.getAll(
       (req as AuthenticatedRequest).user.id,
       {
         type: req.query.type as 'INCOME' | 'EXPENSE' | undefined,
         budgetId: req.query.budgetId as string | undefined,
-        startDate: req.query.startDate as string | undefined,
-        endDate: req.query.endDate as string | undefined,
+        startDate,
+        endDate,
         search: req.query.search as string | undefined,
         page: req.query.page ? parseInt(req.query.page as string) : 1,
         limit: req.query.limit ? parseInt(req.query.limit as string) : 20,

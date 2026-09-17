@@ -9,8 +9,14 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { TableRowSkeleton } from '@/components/ui/Skeleton';
+import { MonthSwitcher } from '@/components/ui/MonthSwitcher';
 import { TransactionForm } from './TransactionForm';
 import { BatchTransactionModal } from './BatchTransactionModal';
+
+function currentYearMonth() {
+  const now = new Date();
+  return { year: now.getFullYear(), month: now.getMonth() + 1 };
+}
 
 // Always-visible breakdown line for a borrow transaction, e.g.
 // "ค่าอาหาร ฿40 · ยืมจาก ช้อปปิ้ง ฿10" — null for the common case (no splits).
@@ -37,12 +43,18 @@ export function TransactionsPage() {
   const [type, setType] = useState<'' | 'INCOME' | 'EXPENSE'>('');
   const [budgetId, setBudgetId] = useState('');
   const [page, setPage] = useState(1);
+  // null = "ดูทั้งหมด" (all-time) — defaults to the current month, matching
+  // Dashboard/Budgets. Independent of the other filters: toggling this never
+  // resets search/type/budgetId.
+  const [monthFilter, setMonthFilter] = useState<{ year: number; month: number } | null>(currentYearMonth());
 
   const { data: budgets = [] } = useBudgets();
   const { data, isLoading } = useTransactions({
     search: search || undefined,
     type: type || undefined,
     budgetId: budgetId || undefined,
+    year: monthFilter?.year,
+    month: monthFilter?.month,
     page,
     limit: 20,
   });
@@ -60,8 +72,39 @@ export function TransactionsPage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-gray-500">{meta?.total ?? 0} รายการ</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-sm text-gray-500 whitespace-nowrap">{meta?.total ?? 0} รายการ</p>
+          {monthFilter ? (
+            <div className="flex items-center gap-2">
+              <MonthSwitcher
+                year={monthFilter.year}
+                month={monthFilter.month}
+                hasPrevious
+                hasNext={
+                  !(monthFilter.year === currentYearMonth().year && monthFilter.month === currentYearMonth().month)
+                }
+                onChange={(year, month) => { setMonthFilter({ year, month }); setPage(1); }}
+              />
+              <button
+                onClick={() => { setMonthFilter(null); setPage(1); }}
+                className="text-xs text-primary-600 dark:text-primary-400 hover:underline whitespace-nowrap"
+              >
+                ดูทั้งหมด
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">ทั้งหมด</span>
+              <button
+                onClick={() => { setMonthFilter(currentYearMonth()); setPage(1); }}
+                className="text-xs text-primary-600 dark:text-primary-400 hover:underline whitespace-nowrap"
+              >
+                ดูเฉพาะเดือน
+              </button>
+            </div>
+          )}
+        </div>
         <div className="flex gap-2 shrink-0">
           <Button
             variant="secondary"

@@ -217,7 +217,7 @@ export function DashboardPage() {
           </Link>
         </div>
         {data.recentTransactions.length === 0 ? (
-          <p className="text-sm text-gray-400 text-center py-8">No transactions yet</p>
+          <p className="text-sm text-gray-400 text-center py-8">No transactions this month</p>
         ) : (
           <div className="divide-y divide-gray-50 dark:divide-gray-800">
             {data.recentTransactions.map((tx) => (

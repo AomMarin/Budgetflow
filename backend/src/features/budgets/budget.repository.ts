@@ -1,6 +1,7 @@
 import { Budget, Prisma } from '@prisma/client';
 import { prisma } from '../../config/database';
 import { CreateBudgetDto, UpdateBudgetDto } from './budget.dto';
+import { bangkokMonthRangeUtc } from '../../utils/period';
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
@@ -100,15 +101,37 @@ export class BudgetRepository {
 
   // Powers the month switcher's "can't go back further" bound. No isArchived
   // filter, same reasoning as findAllForPeriod above.
+  //
+  // Checking BudgetSession alone undercounts: an INCOME transaction is never
+  // tied to a budget, so assertBudgetsPeriodOpen() never runs against it (by
+  // design — INCOME doesn't affect any budget, see transaction.service.ts
+  // create()), and CSV import bypasses that guard entirely for every
+  // transaction type (existing gap, see CLAUDE.md). Both mean a real user
+  // can legitimately have Transaction rows older than their very first
+  // BudgetSession, at any time, not just as a one-off migration artifact —
+  // confirmed live against the demo account (2026-09-17): its budgets
+  // predate the periodYear/periodMonth columns entirely (added by the
+  // 2026-08-16 migration, whose dbgenerated() default stamped pre-existing
+  // budgets with that migration date, not their true creation date), so no
+  // BudgetSession before August exists for it even though real June
+  // transactions do. So this checks both sources and returns true if either
+  // has anything earlier.
   async hasSessionBefore(userId: string, year: number, month: number, db: Db = prisma): Promise<boolean> {
-    const earlier = await db.budgetSession.findFirst({
-      where: {
-        userId,
-        OR: [{ periodYear: { lt: year } }, { periodYear: year, periodMonth: { lt: month } }],
-      },
-      select: { id: true },
-    });
-    return earlier !== null;
+    const { start } = bangkokMonthRangeUtc(year, month);
+    const [earlierSession, earlierTransaction] = await Promise.all([
+      db.budgetSession.findFirst({
+        where: {
+          userId,
+          OR: [{ periodYear: { lt: year } }, { periodYear: year, periodMonth: { lt: month } }],
+        },
+        select: { id: true },
+      }),
+      db.transaction.findFirst({
+        where: { userId, date: { lt: start } },
+        select: { id: true },
+      }),
+    ]);
+    return earlierSession !== null || earlierTransaction !== null;
   }
 
   // totalRemaining is a floored per-budget sum (not totalAllocated - totalSpent):

@@ -3,6 +3,7 @@ import { TransactionService } from '../transaction.service';
 import { BudgetService } from '../../budgets/budget.service';
 import { prisma } from '../../../config/database';
 import { createTestUser, cleanupTestUser, assertSessionMirror, TestUserContext } from '../../../test/helpers';
+import { bangkokMonthRangeUtc } from '../../../utils/period';
 
 describe('TransactionService — EXPENSE side-effects', () => {
   let ctx: TestUserContext;
@@ -127,5 +128,62 @@ describe('TransactionService — EXPENSE side-effects', () => {
     expect(Number(account.balance)).toBe(1000);
     expect(Number(budget.spentAmount)).toBe(0);
     await assertSessionMirror(ctx.userId);
+  });
+});
+
+// See C:\Users\ammar\.claude\plans\linear-honking-hamming.md — mirrors what
+// transaction.controller.ts's year/month -> startDate/endDate translation
+// does; tested at the service level since this codebase has no HTTP-level
+// test harness (consistent with every other test file here).
+describe('TransactionService.getAll — startDate/endDate range filter (month switcher)', () => {
+  let ctx: TestUserContext;
+  const txService = new TransactionService();
+
+  beforeEach(async () => {
+    ctx = await createTestUser(1000);
+  });
+
+  afterEach(async () => {
+    await cleanupTestUser(ctx.userId);
+  });
+
+  it('only returns transactions within the given range, same shape transaction.controller.ts sends', async () => {
+    const now = new Date();
+    const current = { year: now.getFullYear(), month: now.getMonth() + 1 };
+    const past = current.month === 1
+      ? { year: current.year - 1, month: 12 }
+      : { year: current.year, month: current.month - 1 };
+
+    await prisma.transaction.create({
+      data: {
+        userId: ctx.userId,
+        accountId: ctx.accountId,
+        type: 'INCOME',
+        amount: 111,
+        description: 'last month',
+        date: bangkokMonthRangeUtc(past.year, past.month).start,
+      },
+    });
+    await prisma.transaction.create({
+      data: {
+        userId: ctx.userId,
+        accountId: ctx.accountId,
+        type: 'INCOME',
+        amount: 222,
+        description: 'this month',
+        date: bangkokMonthRangeUtc(current.year, current.month).start,
+      },
+    });
+
+    const { start, end } = bangkokMonthRangeUtc(current.year, current.month);
+    const { transactions } = await txService.getAll(ctx.userId, {
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+      page: 1,
+      limit: 20,
+    });
+
+    expect(transactions).toHaveLength(1);
+    expect(transactions[0].description).toBe('this month');
   });
 });

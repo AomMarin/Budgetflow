@@ -51,6 +51,39 @@ describe('DashboardService.getSummaryForPeriod', () => {
     });
   });
 
+  it('the current-period branch bounds recentTransactions to that month too, not "5 most recent ever"', async () => {
+    const current = getBangkokYearMonth();
+    const past = monthsBefore(current, 2);
+
+    // Created directly (not via TransactionService), same as the historical
+    // test below — only exercising DashboardService's own read here.
+    await prisma.transaction.create({
+      data: {
+        userId: ctx.userId,
+        accountId: ctx.accountId,
+        type: 'INCOME',
+        amount: 111,
+        description: 'old, must not leak into current-month recent list',
+        date: bkk(past.year, past.month, 5),
+      },
+    });
+    await prisma.transaction.create({
+      data: {
+        userId: ctx.userId,
+        accountId: ctx.accountId,
+        type: 'INCOME',
+        amount: 222,
+        description: 'this month',
+        date: bkk(current.year, current.month, 5),
+      },
+    });
+
+    const summary = await dashboardService.getSummaryForPeriod(ctx.userId, current.year, current.month);
+
+    expect(summary.recentTransactions).toHaveLength(1);
+    expect(summary.recentTransactions[0].description).toBe('this month');
+  });
+
   it('rejects a period after the current one', async () => {
     const current = getBangkokYearMonth();
     const future = nextYearMonth(current);

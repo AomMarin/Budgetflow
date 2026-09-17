@@ -38,6 +38,10 @@ interface TransactionFilters {
   search?: string;
   page?: number;
   limit?: number;
+  // Month-switcher filter — additive alongside startDate/endDate, translated
+  // to a Bangkok-correct range server-side (transaction.controller.ts).
+  year?: number;
+  month?: number;
 }
 
 export function useTransactions(filters: TransactionFilters = {}) {
